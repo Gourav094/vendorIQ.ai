@@ -289,6 +289,11 @@ Closes #<issue_number>
 
 ---
 
+## Technical Write-up  
+Medium article explaining the architecture and design decisions: https://medium.com/@2024sl93088/ai-powered-invoice-management-system-for-small-and-medium-businesses-vendoriq-edffe40649dd
+
+---
+
 ## 🔮 Future Enhancements
 
 * 📦 Integration with Tally / QuickBooks
