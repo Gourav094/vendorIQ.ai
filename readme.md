@@ -236,6 +236,13 @@ Closes #<issue_number>
 
 ---
 
+## Project History
+This project was originally developed as part of a team under an organization repository.
+For collaboration history including issues and pull requests, see:
+ Original Organization Repository: https://github.com/BITSSAP2025AugAPIBP3Sections/APIBP-20242YA-Team-1
+
+---
+
 ## 🎯 Implementation Highlights
 
 ### 🔒 Security Features
