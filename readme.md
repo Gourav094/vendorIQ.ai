@@ -28,7 +28,7 @@ They arrive scattered across emails, PDFs, and attachments — making tax audits
 - Fetches invoices automatically from Gmail.
 - Categorizes them by **vendor** into Google Drive.
 - Extracts structured data using **OCR + AI**.
-- Logs all invoice details into **Google Sheets**.
+- Provides **Real-time Analytics** powered by AI.
 - Allows querying and insights using a **RAG-based Chatbot**.
 
 ---
@@ -39,9 +39,8 @@ They arrive scattered across emails, PDFs, and attachments — making tax audits
 |----------|--------------|-----------|------|
 | **Authentication & User Management** | Handles Google OAuth login, email/password registration, JWT tokens, and user profile management. | Python, Flask, JWT, Google OAuth, MongoDB | 4001 |
 | **Email & Storage Service** | Fetches invoices from Gmail, identifies vendor from sender, uploads to Drive with vendor-organized folders. Includes scheduler for automatic fetching. | Node.js, Express, MongoDB (Mongoose), Google Gmail/Drive APIs, Helmet, Rate Limiting | 4002 |
-| **OCR & Invoice Extraction** | Extracts text from PDF invoices and structures data (vendor, date, amount, items) using AI. | Python, FastAPI, Google Gemini API, pdfminer.six | 4003 |
-| **Google Sheets & Analytics** | Logs invoice data to Google Sheets, computes analytics (spending trends, vendor totals). | Node.js, Express, Google Sheets API | 4004 |
-| **Chatbot (RAG)** | Vector-based knowledge retrieval system for querying vendor data using natural language. Supports REST and GraphQL. | Python, FastAPI, GraphQL (Strawberry), Embeddings, ChromaDB | 4005 |
+| **OCR & Invoice Extraction** | Extracts text from PDF invoices and structures data (vendor, date, amount, items) using AI. Includes retry logic with exponential backoff. | Python, FastAPI, Google Gemini API, pdfminer.six | 4003 |
+| **Chatbot & Analytics (RAG)** | Vector-based knowledge retrieval for natural language queries. Provides real-time analytics with AI-generated insights. Supports REST and GraphQL. | Python, FastAPI, GraphQL (Strawberry), Embeddings, ChromaDB | 4005 |
 
 > **Note:** Logging is integrated within each service using custom loggers. There is no separate notification service.
 
@@ -51,10 +50,9 @@ They arrive scattered across emails, PDFs, and attachments — making tax audits
 
 1. **User authenticates** via Authentication Service (Google OAuth or Email/Password).  
 2. **Email & Storage Service** connects Gmail, fetches invoice emails, and uploads to Drive in vendor-organized folders.  
-3. **OCR Service** extracts structured data from PDF invoices using Google Gemini API.  
-4. **Sheets Service** logs extracted invoice data to Google Sheets for analytics.  
-5. **RAG Chatbot** uses vector embeddings to answer natural language queries about vendors and invoices.  
-6. **Logging** is integrated per-service for audit trails and monitoring.
+3. **OCR Service** extracts structured data from PDF invoices using Google Gemini API (with automatic retry on failures).  
+4. **Chat Service** indexes invoice data for AI-powered analytics and natural language queries.  
+5. **Logging** is integrated per-service for audit trails and monitoring.
 
 <div align="center">
   <img src="https://github.com/user-attachments/assets/fa362905-6d4f-4d65-9175-4eb611691ee7" width="80%" alt="System Flow Diagram"/>
@@ -67,8 +65,8 @@ They arrive scattered across emails, PDFs, and attachments — making tax audits
 ### Core Features
 - 📩 **Gmail Invoice Fetching** (OAuth + scheduled automation)
 - 📂 **Google Drive Storage** (vendor-wise folders: `invoiceAutomation/<Vendor>/invoices`)
-- 🧾 **AI-Powered OCR** (Google Gemini API for structured extraction)
-- 📊 **Google Sheets Analytics** (automatic logging + spending trends)
+- 🧾 **AI-Powered OCR** (Google Gemini API with automatic retry)
+- 📊 **Real-time Analytics** (AI-generated insights and spending trends)
 - 💬 **RAG Chatbot** (natural language queries with vector search)
 - 🔔 **Integrated Logging** (per-service audit trails)
 
