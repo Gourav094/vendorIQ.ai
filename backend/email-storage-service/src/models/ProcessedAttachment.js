@@ -6,7 +6,7 @@ import mongoose from "mongoose";
 
 const ProcessedAttachmentSchema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    userId: { type: String, required: true, index: true }, // auth_user_id from authentication service
     gmailMessageId: { type: String, required: true },
     gmailAttachmentId: { type: String, required: true },
     vendor: { type: String, required: true },

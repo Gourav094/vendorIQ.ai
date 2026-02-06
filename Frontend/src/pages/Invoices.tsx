@@ -26,6 +26,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import api, { type Invoice, type MasterRecord, type MasterSummary } from "@/services/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 const BASE_CURRENCY = "INR";
 const SUPPORTED_CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD"] as const;
@@ -35,8 +36,9 @@ const Invoices = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { user } = useAuth(); // Get authenticated user
   
-  const [userId, setUserId] = useState(() => searchParams.get("userId") || localStorage.getItem("tempUserId") || "690c7d0ee107fb31784c1b1b");
+  const userId = user?.id || ""; // Use authenticated user's ID
   const [vendorId, setVendorId] = useState(() => searchParams.get("vendorId") || "");
   const [vendorName, setVendorName] = useState(() => searchParams.get("vendorName") || "");
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -51,12 +53,20 @@ const Invoices = () => {
   const [ratesError, setRatesError] = useState<string | null>(null);
   const [ratesTimestamp, setRatesTimestamp] = useState<string | null>(null);
 
+  // Redirect to login if not authenticated
   useEffect(() => {
-    localStorage.setItem("tempUserId", userId);
-  }, [userId]);
+    if (!user) {
+      toast({
+        title: "Authentication Required",
+        description: "Please log in to view invoices",
+        variant: "destructive",
+      });
+      navigate('/login');
+    }
+  }, [user, navigate, toast]);
 
   useEffect(() => {
-    if (userId && vendorId && /^[a-f0-9]{24}$/i.test(userId)) {
+    if (userId && vendorId) {
       fetchInvoices();
     }
   }, [userId, vendorId]);
@@ -181,7 +191,6 @@ const Invoices = () => {
       toast({
         title: "🔌 Connection Failed",
         description: "Cannot reach the email service. Please ensure the backend is running on port 4002.",
-        variant: "destructive",
       });
     } finally {
       setIsLoading(false);
@@ -344,7 +353,7 @@ const Invoices = () => {
 
     const rate = exchangeRates?.[targetCurrency];
     if (!rate || rate === 0) {
-      return { value: amount, available: false } as const;
+      return { value: amount * rate, available: false } as const;
     }
 
     return { value: amount * rate, available: true } as const;
@@ -672,9 +681,6 @@ const Invoices = () => {
           <Badge variant="outline" className="px-3 py-1 text-sm">
             Vendor: {vendorName}
           </Badge>
-          <Badge variant="outline" className="px-3 py-1 text-sm font-mono">
-            ID: {vendorId.substring(0, 12)}...
-          </Badge>
         </div>
       )}
 
@@ -724,22 +730,30 @@ const Invoices = () => {
                     <li>• The invoice folder is empty in Google Drive</li>
                   </ul>
                 )}
-                <p className="text-xs text-muted-foreground max-w-md">
-                  💡 Tip: {vendorId ? "Go to Email Sync and fetch emails from this vendor's email address" : "Navigate to the Vendors page to browse available vendors"}
+                <p className="text-xs text-muted-foreground max-w-md mb-4">
+                  💡 Tip: {vendorId ? "Go to Email Sync and fetch emails from this vendor's email address, or browse other vendors" : "Navigate to the Vendors page to browse available vendors"}
                 </p>
-                {vendorId && (
-                  <Button onClick={() => navigate('/email-sync')} className="mt-4">
-                    Go to Email Sync
+                <div className="flex items-center gap-3">
+                  <Button onClick={() => navigate('/vendors')} variant="outline">
+                    Browse Vendors
                   </Button>
-                )}
+                  {vendorId && (
+                    <Button onClick={() => navigate('/email-sync')}>
+                      Go to Email Sync
+                    </Button>
+                  )}
+                </div>
               </>
             ) : (
               <>
-                <FileText className="h-12 w-12 text-muted-foreground mb-4" />
+                <FileText className="h-12 w-12 text-muted-foreground my-4 pt-2" />
                 <h3 className="text-lg font-semibold mb-2">No Matches</h3>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground mb-4">
                   No invoices match your search query "{searchQuery}"
                 </p>
+                <Button onClick={() => navigate('/vendors')} variant="outline">
+                  Browse Other Vendors
+                </Button>
               </>
             )}
           </CardContent>

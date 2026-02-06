@@ -1,4 +1,3 @@
-
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,23 +8,24 @@ import { AlertCircle, Database, FolderOpen, Mail, CheckCircle2, ExternalLink, Un
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
 import api, { type SyncStatus, disconnectGoogleAccount } from "@/services/api";
 
 const Settings = () => {
   const { toast } = useToast();
-  const [userId, setUserId] = useState(() => localStorage.getItem("tempUserId") || "690c7d0ee107fb31784c1b1b");
+  const { user } = useAuth(); // Get authenticated user
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const fetchSyncStatus = useCallback(async () => {
-    if (!userId || !/^[a-f0-9]{24}$/i.test(userId)) {
+    if (!user?.id) {
       return;
     }
 
     setIsLoading(true);
     try {
-      const { data, response } = await api.getUserSyncStatus(userId);
+      const { data, response } = await api.getUserSyncStatus(user.id);
 
       if (response.ok) {
         setSyncStatus(data);
@@ -39,33 +39,21 @@ const Settings = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [userId]);
+  }, [user?.id]);
 
   useEffect(() => {
-    // Save userId to localStorage whenever it changes
-    localStorage.setItem("tempUserId", userId);
-  }, [userId]);
-
-  useEffect(() => {
-    if (userId && /^[a-f0-9]{24}$/i.test(userId)) {
+    if (user?.id) {
       fetchSyncStatus();
     }
-  }, [userId, fetchSyncStatus]);
+  }, [user?.id, fetchSyncStatus]);
 
   // Handle OAuth callback redirect (if user returns here)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const connected = params.get('connected');
     const email = params.get('email');
-    const returnedUserId = params.get('userId');
 
     if (connected === 'true' && email) {
-      // Update userId if returned from backend
-      if (returnedUserId) {
-        setUserId(returnedUserId);
-        localStorage.setItem("tempUserId", returnedUserId);
-      }
-
       toast({
         title: "Google Account Connected!",
         description: `Successfully connected as ${email}`,
@@ -80,21 +68,29 @@ const Settings = () => {
   }, [toast, fetchSyncStatus]);
 
   const connectGoogleAccount = () => {
-    window.location.href = api.getGoogleAuthUrl();
+    if (!user?.id) {
+      toast({
+        title: "Not Logged In",
+        description: "Please log in before connecting Google account",
+        variant: "destructive"
+      });
+      return;
+    }
+    window.location.href = api.getGoogleAuthUrl(user.id);
   };
 
   const disconnectGoogle = async () => {
-    if (!userId) return;
+    if (!user?.id) return;
     const confirm = window.confirm("Disconnect Google Drive & Gmail integration? This will stop further indexing until reconnected.");
     if (!confirm) return;
     try {
-      const { data, response } = await disconnectGoogleAccount(userId);
+      const { data, response } = await disconnectGoogleAccount(user.id);
       if (response.ok) {
         setIsConnected(false);
         setSyncStatus(s => s ? { ...s, hasGoogleConnection: false } : s);
-        toast({ title: "Disconnected", description: data.message || "Google account disconnected." });
+        toast({ title: "Disconnected", description: (data as any).message || "Google account disconnected." });
       } else {
-        toast({ title: "Disconnect Failed", description: data.message || 'Unknown error', variant: 'destructive' });
+        toast({ title: "Disconnect Failed", description: (data as any).message || 'Unknown error', variant: 'destructive' });
       }
     } catch (e) {
       toast({ title: "Network Error", description: 'Failed to disconnect. Try again later.', variant: 'destructive' });

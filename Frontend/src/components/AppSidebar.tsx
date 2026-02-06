@@ -4,11 +4,12 @@ import {
   Building2,
   BarChart3,
   Settings,
-  ChevronsUpDown, 
+  ChevronsUpDown,
   LogOut,
   LifeBuoy,
   Mail,
   Clock,
+  Activity,
 } from "lucide-react";
 import {
   Sidebar,
@@ -27,7 +28,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useRef, useState } from "react";
-import { MessageCircle } from "lucide-react"; 
+import { MessageCircle } from "lucide-react";
 
 const mainMenuItems = [
   {
@@ -67,6 +68,11 @@ const secondaryMenuItems = [
     title: "Scheduled Jobs",
     url: "/scheduled-jobs",
     icon: Clock,
+  },
+  {
+    title: "Processing Status",
+    url: "/processing-status",
+    icon: Activity,
   },
 ];
 
@@ -144,7 +150,7 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
-          </SidebarGroupContent> 
+          </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className=" p-2">
@@ -195,7 +201,7 @@ export function AppSidebar() {
               >
                 <LogOut className="h-5 w-5" />
                 <span>Logout</span>
-              </DropdownMenu.Item>  
+              </DropdownMenu.Item>
             </div>
           </DropdownMenu.Content>
         </DropdownMenu.Root>

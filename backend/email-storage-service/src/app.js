@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import {config} from "./config/index.js";
+import { config } from "./config/index.js";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
@@ -8,22 +8,23 @@ import logger, { requestLogger } from "./utils/logger.js";
 
 //imports for swagger documentation
 import swaggerUi from "swagger-ui-express";
-import {swaggerDocs} from "./routes/swaggerDocs.js";
+import { swaggerDocs } from "./routes/swaggerDocs.js";
 import emailRoutes from "./routes/emailRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
-import {connectDB} from "./config/db.js";
+import processingJobRoutes from "./routes/processingJobRoutes.js";
+import { connectDB } from "./config/db.js";
 import { getGoogleAuthURL, googleOAuthCallback } from "./controllers/authController.js";
 
 const app = express();
 app.disable("x-powered-by");
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
+    crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 app.use(cors({
-  origin: ["http://localhost:8000", "http://localhost:5173", "http://localhost:3000", "http://localhost:4000"],
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+    origin: ["http://localhost:8000", "http://localhost:5173", "http://localhost:3000", "http://localhost:4000"],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
 }));
 app.use(express.json());
 app.use(cookieParser());
@@ -33,18 +34,18 @@ app.use(requestLogger);
 connectDB();
 
 // Rate limiters with JSON responses
-const authLimiter = rateLimit({ 
-  windowMs: 60 * 1000, // 1 minute
-  max: 60,
-  message: { message: "Too many authentication requests. Please try again later.", retryAfter: "1 minute" }
+const authLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 60,
+    message: { message: "Too many authentication requests. Please try again later.", retryAfter: "1 minute" }
 });
 
-const fetchLimiter = rateLimit({ 
-  windowMs: 60 * 1000, // 1 minute
-  max: 60,
-  message: { message: "Too many fetch requests. Please wait before retrying.", retryAfter: "1 minute" },
-  standardHeaders: true,
-  legacyHeaders: false
+const fetchLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 60,
+    message: { message: "Too many fetch requests. Please wait before retrying.", retryAfter: "1 minute" },
+    standardHeaders: true,
+    legacyHeaders: false
 });
 
 /**
@@ -69,7 +70,7 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
 // Health check Route
 app.get("/health", (req, res) => {
-   res.json({status:"OK", service: "email-storage-service"});
+    res.json({ status: "OK", service: "email-storage-service" });
 });
 
 /**
@@ -107,6 +108,12 @@ app.get("/api-info", (req, res) => {
                 "GET /api/v1/emails/schedule/:userId": "Get scheduled email fetch jobs for user",
                 "DELETE /api/v1/emails/schedule/:userId/:jobId": "Cancel a scheduled job"
             },
+            processing: {
+                "GET /api/v1/processing/jobs/:jobId": "Get job status by ID",
+                "GET /api/v1/processing/users/:userId/jobs": "List all jobs for a user",
+                "GET /api/v1/processing/users/:userId/jobs/retryable": "Get retryable failed jobs",
+                "POST /api/v1/processing/jobs/:jobId/retry": "Retry a failed job"
+            },
             drive: {
                 "GET /api/v1/drive/users/:userId/vendors": "List all vendor folders in Drive",
                 "GET /api/v1/drive/users/:userId/vendors/:vendorId/invoices": "List invoices for specific vendor"
@@ -129,6 +136,7 @@ app.get("/api-info", (req, res) => {
             "Google Drive organization (invoiceAutomation folder structure)",
             "Manual and scheduled email fetching (hourly/daily/weekly)",
             "Sync status tracking to avoid duplicate fetches",
+            "Persistent job tracking with retry capability",
             "User-friendly error messages with actionable guidance"
         ],
         rateLimit: {
@@ -149,6 +157,7 @@ app.get("/auth/google/callback", authLimiter, googleOAuthCallback);
 // Importing email routes
 app.use("/api/v1", fetchLimiter, emailRoutes);
 app.use("/api/v1", analyticsRoutes);
+app.use("/api/v1/processing", processingJobRoutes);  // New persistent job routes
 
 // Start the server
 

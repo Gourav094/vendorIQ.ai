@@ -1,48 +1,45 @@
-import User from "../models/User.js";
+import GoogleIntegration from "../models/GoogleIntegration.js";
 import logger from "../utils/logger.js";
 import { listVendorFolders, listVendorInvoices, getVendorMasterData } from "../services/driveService.js";
 
 export const getVendorsByUser = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { userId } = req.params; // This is auth_user_id
 
     if (!userId) {
       return res.status(400).json({ 
         message: "Missing required parameter: userId.",
         details: "The userId path parameter is required to identify which user's vendors to list.",
-        example: "/api/v1/drive/users/690c7d0ee107fb31784c1b1b/vendors"
+        example: "/api/v1/drive/users/678a1b2c3d4e5f6789abcdef/vendors"
       });
     }
 
-    // Validate userId format
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId.",
-        providedValue: userId
-      });
-    }
+    // Find Google integration by auth_user_id
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
 
-    const user = await User.findById(userId);
-    if (!user) {
+    if (!integration) {
       return res.status(404).json({ 
-        message: "User not found.",
-        details: "No user exists with the provided userId. Please complete Google OAuth authentication first.",
-        action: "Visit /auth/google to authenticate and create a user account.",
+        message: "Google account not connected.",
+        details: "No Google integration found for this user.",
+        action: "Connect your Google account at /auth/google to enable Drive access.",
         userId: userId
       });
     }
 
-    if (!user.googleRefreshToken) {
+    if (integration.status !== "CONNECTED" || !integration.refresh_token) {
       return res.status(400).json({ 
         message: "Google Drive not connected.",
-        details: "This user has not connected their Google account. Google Drive access is required to list vendor folders.",
-        action: "Complete OAuth authentication at /auth/google to grant Drive access.",
-        userEmail: user.email
+        details: "This user's Google integration is disconnected or missing tokens.",
+        action: "Reconnect at /auth/google to grant Drive access.",
+        userEmail: integration.email,
+        status: integration.status
       });
     }
 
-    const vendorsResult = await listVendorFolders(user);
+    const vendorsResult = await listVendorFolders(integration);
     const vendors = Array.isArray(vendorsResult) ? vendorsResult : [];
 
     return res.status(200).json({
@@ -75,46 +72,41 @@ export const getVendorsByUser = async (req, res) => {
 
 export const getInvoicesByVendor = async (req, res) => {
   try {
-    const { userId, vendorId } = req.params;
+    const { userId, vendorId } = req.params; // userId is auth_user_id
 
     if (!userId || !vendorId) {
       return res.status(400).json({ 
         message: "Missing required parameters.",
         details: "Both 'userId' and 'vendorId' path parameters are required.",
-        example: "/api/v1/drive/users/690c7d0ee107fb31784c1b1b/vendors/1ABC123xyz/invoices",
+        example: "/api/v1/drive/users/678a1b2c3d4e5f6789abcdef/vendors/1ABC123xyz/invoices",
         providedValues: { userId, vendorId }
       });
     }
 
-    // Validate userId format
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId.",
-        providedValue: userId
-      });
-    }
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
 
-    const user = await User.findById(userId);
-    if (!user) {
+    if (!integration) {
       return res.status(404).json({ 
-        message: "User not found.",
-        details: "No user exists with the provided userId.",
-        action: "Verify the userId or authenticate at /auth/google first.",
+        message: "Google account not connected.",
+        details: "No Google integration found for this user.",
+        action: "Connect your Google account at /auth/google.",
         userId: userId
       });
     }
 
-    if (!user.googleRefreshToken) {
+    if (integration.status !== "CONNECTED" || !integration.refresh_token) {
       return res.status(400).json({ 
         message: "Google Drive not connected.",
-        details: "This user has not connected their Google account.",
-        action: "Complete OAuth at /auth/google to grant Drive access.",
-        userEmail: user.email
+        details: "This user's Google integration is disconnected or missing tokens.",
+        action: "Reconnect at /auth/google to grant Drive access.",
+        userEmail: integration.email
       });
     }
 
-    const payload = await listVendorInvoices(user, vendorId);
+    const payload = await listVendorInvoices(integration, vendorId);
 
     return res.status(200).json({
       userId,
@@ -151,45 +143,41 @@ export const getInvoicesByVendor = async (req, res) => {
 
 export const getVendorMaster = async (req, res) => {
   try {
-    const { userId, vendorId } = req.params;
+    const { userId, vendorId } = req.params; // userId is auth_user_id
 
     if (!userId || !vendorId) {
       return res.status(400).json({
         message: "Missing required parameters.",
         details: "Both 'userId' and 'vendorId' path parameters are required.",
-        example: "/api/v1/drive/users/690c7d0ee107fb31784c1b1b/vendors/1ABC123xyz/master",
+        example: "/api/v1/drive/users/678a1b2c3d4e5f6789abcdef/vendors/1ABC123xyz/master",
         providedValues: { userId, vendorId },
       });
     }
 
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId.",
-        providedValue: userId,
-      });
-    }
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
 
-    const user = await User.findById(userId);
-    if (!user) {
+    if (!integration) {
       return res.status(404).json({
-        message: "User not found.",
-        details: "No user exists with the provided userId.",
-        action: "Verify the userId or authenticate at /auth/google first.",
+        message: "Google account not connected.",
+        details: "No Google integration found for this user.",
+        action: "Connect your Google account at /auth/google.",
         userId: userId,
       });
     }
 
-    if (!user.googleRefreshToken) {
+    if (integration.status !== "CONNECTED" || !integration.refresh_token) {
       return res.status(400).json({
         message: "Google Drive not connected.",
-        details: "This user has not connected their Google account.",
-        action: "Complete OAuth at /auth/google to grant Drive access.",
-        userEmail: user.email,
+        details: "This user's Google integration is disconnected or missing tokens.",
+        action: "Reconnect at /auth/google to grant Drive access.",
+        userEmail: integration.email,
       });
     }
 
-    const masterPayload = await getVendorMasterData(user, vendorId);
+    const masterPayload = await getVendorMasterData(integration, vendorId);
 
     return res.status(200).json({
       userId,

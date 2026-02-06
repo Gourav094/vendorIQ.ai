@@ -1,31 +1,28 @@
-import User from "../models/User.js";
+import GoogleIntegration from "../models/GoogleIntegration.js";
 import logger from "../utils/logger.js";
 
 export const getUserSyncStatus = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { userId } = req.params; // This is auth_user_id from auth service
 
-    // Validate userId format
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId.",
-        providedValue: userId
-      });
-    }
+    // Find Google integration by auth_user_id
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
 
-    const user = await User.findById(userId);
-    if (!user) {
+    if (!integration) {
       return res.status(404).json({ 
-        message: "User not found.",
-        details: "No user exists with the provided userId.",
-        action: "Verify the userId or complete OAuth authentication at /auth/google.",
-        userId: userId
+        message: "Google account not connected.",
+        details: "No Google integration found for this user.",
+        action: "Connect your Google account to enable email sync.",
+        userId: userId,
+        hasGoogleConnection: false
       });
     }
 
-    const hasConnection = !!(user.googleRefreshToken);
-    const lastSync = user.lastSyncedAt;
+    const hasConnection = integration.status === "CONNECTED" && !!integration.refresh_token;
+    const lastSync = integration.lastSyncedAt;
 
     let message = "User has never synced emails.";
     if (lastSync) {
@@ -33,10 +30,11 @@ export const getUserSyncStatus = async (req, res) => {
     }
 
     return res.status(200).json({
-      userId,
-      email: user.email,
+      userId: integration.auth_user_id,
+      email: integration.email,
       lastSyncedAt: lastSync,
       hasGoogleConnection: hasConnection,
+      status: integration.status,
       message,
     });
   } catch (error) {
@@ -52,31 +50,25 @@ export const getUserSyncStatus = async (req, res) => {
 
 export const resetUserSyncStatus = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { userId } = req.params; // This is auth_user_id
 
-    // Validate userId format
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId.",
-        providedValue: userId
-      });
-    }
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
 
-    const user = await User.findById(userId);
-    if (!user) {
+    if (!integration) {
       return res.status(404).json({ 
-        message: "User not found.",
-        details: "No user exists with the provided userId.",
+        message: "Google account not connected.",
+        details: "No Google integration found for this user.",
         userId: userId
       });
     }
 
-    await User.findByIdAndUpdate(userId, {
-      lastSyncedAt: null,
-    });
+    integration.lastSyncedAt = null;
+    await integration.save();
 
-    logger.info("User sync status reset", { userId, email: user.email });
+    logger.info("User sync status reset", { userId, email: integration.email });
 
     return res.status(200).json({
       message: "Sync status reset successfully. Next fetch will use the fromDate parameter.",
@@ -95,28 +87,30 @@ export const resetUserSyncStatus = async (req, res) => {
 
 export const disconnectGoogleAccount = async (req, res) => {
   try {
-    const { userId } = req.params;
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId.",
-        providedValue: userId
-      });
-    }
-    const user = await User.findById(userId);
-    if (!user) {
+    const { userId } = req.params; // This is auth_user_id
+
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
+
+    if (!integration) {
       return res.status(404).json({
-        message: "User not found.",
-        details: "No user exists with the provided userId.",
+        message: "Google account not connected.",
+        details: "No Google integration found for this user.",
         userId
       });
     }
-    // Null out Google tokens
-    await User.findByIdAndUpdate(userId, {
-      googleAccessToken: null,
-      googleRefreshToken: null,
-    });
-    logger.info("Google account disconnected", { userId, email: user.email });
+
+    // Update integration to disconnected state
+    integration.status = "DISCONNECTED";
+    integration.access_token = null;
+    integration.refresh_token = null;
+    integration.disconnected_at = new Date();
+    await integration.save();
+
+    logger.info("Google account disconnected", { userId, email: integration.email });
+
     return res.status(200).json({
       message: "Google Drive connection disconnected successfully.",
       userId,

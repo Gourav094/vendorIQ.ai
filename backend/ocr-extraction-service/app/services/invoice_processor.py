@@ -11,9 +11,14 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
+from app.models.invoice_status import InvoiceProcessingStatus, ProcessingStatusStore
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Initialize global status store
+_status_store = ProcessingStatusStore(storage_dir=os.getenv("PROCESSING_STATUS_DIR", "processing_status"))
 
 EMAIL_BASE = os.getenv("EMAIL_SERVICE_BASE_URL", "http://localhost:4002")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -237,15 +242,46 @@ async def process_vendor_invoices(
             skipped.append({"reason": "already processed", "invoice": invoice})
             continue
 
+        # Initialize or load status for this invoice
+        status = _status_store.get_status(user_id, vendor_name, file_id)
+        if not status:
+            status = InvoiceProcessingStatus(
+                user_id=user_id,
+                vendor_name=vendor_name,
+                drive_file_id=file_id,
+                file_name=file_name,
+                vendor_folder_id=vendor_folder_id,
+                invoice_folder_id=invoice_folder_id,
+                web_view_link=web_view_link
+            )
+        
+        # Download phase
+        status.mark_downloading()
+        _status_store.save_status(status)
+        
         pdf_bytes = await _download_pdf(file_id, refresh_token)
         if not pdf_bytes:
-            skipped.append({"reason": "download failed", "invoice": invoice})
+            status.mark_ocr_failed("Failed to download PDF from Drive", retryable=True, code="DOWNLOAD_FAILED")
+            _status_store.save_status(status)
+            skipped.append({"reason": "download failed", "invoice": invoice, "file_id": file_id})
             continue
 
+        # OCR phase
+        status.mark_ocr_processing()
+        _status_store.save_status(status)
+        
         ocr_payload = await _run_invoice_ocr(file_name, pdf_bytes)
         if not ocr_payload or "error" in ocr_payload:
-            skipped.append({"reason": "ocr failed", "invoice": invoice})
+            error_msg = ocr_payload.get("error") if ocr_payload else "OCR extraction failed"
+            # Use retryable flag from OCR response, default to True if not specified
+            retryable = ocr_payload.get("retryable", True) if ocr_payload else True
+            status.mark_ocr_failed(error_msg, retryable=retryable, code="OCR_EXTRACTION_FAILED")
+            _status_store.save_status(status)
+            skipped.append({"reason": "ocr failed", "invoice": invoice, "file_id": file_id, "error": error_msg})
             continue
+        
+        status.mark_ocr_success(ocr_payload)
+        _status_store.save_status(status)
 
         enriched = dict(ocr_payload)
         enriched.update(
@@ -271,10 +307,34 @@ async def process_vendor_invoices(
 
     # Always write master locally first (even if empty) then direct-ingest before Drive upload
     _write_master(master_path, master_records)
+    
+    # Track chat indexing for all processed invoices
+    if processed:
+        for file_id in processed:
+            status = _status_store.get_status(user_id, vendor_name, file_id)
+            if status and status.status == "OCR_SUCCESS":
+                status.mark_chat_indexing()
+                _status_store.save_status(status)
+    
     try:
         await _direct_ingest_vendor(user_id=user_id, vendor_name=vendor_name, records=master_records, incremental=bool(processed))
+        
+        # Mark chat indexing as successful for all processed invoices
+        if processed:
+            for file_id in processed:
+                status = _status_store.get_status(user_id, vendor_name, file_id)
+                if status and status.status == "CHAT_INDEXING":
+                    status.mark_completed()
+                    _status_store.save_status(status)
     except Exception as exc:
         logger.error("Direct ingest failed", exc_info=exc, extra={"vendor": vendor_name})
+        # Mark chat indexing as failed for processed invoices
+        if processed:
+            for file_id in processed:
+                status = _status_store.get_status(user_id, vendor_name, file_id)
+                if status and status.status == "CHAT_INDEXING":
+                    status.mark_chat_failed(str(exc), retryable=True, code="CHAT_INGEST_FAILED")
+                    _status_store.save_status(status)
 
     if processed:
         await _upload_master_to_drive(invoice_folder_id, master_path, refresh_token)

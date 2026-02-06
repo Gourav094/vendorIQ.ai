@@ -38,6 +38,8 @@ module.exports = function verifyToken(req, res, next) {
         token = parts[1];
       }
     }
+    console.log("Token: ", token)
+    console.log("req.cookies: ", req.cookies)
 
     if (!token) {
       return res.status(401).json({ error: 'Unauthorized - token missing' });

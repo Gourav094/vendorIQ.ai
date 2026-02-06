@@ -22,6 +22,58 @@ export interface SyncStatus {
   message: string;
 }
 
+export interface ProcessDocuments {
+  success: boolean;
+  message: string;
+  totalDocuments: number;
+  vendorsProcessed: number;
+  vendorsFailed?: number;
+  results?: Array<{
+    vendor: string;
+    status: string;
+    invoiceCount: number;
+    response?: {
+      status: string;
+      summary: {
+        userId: string;
+        vendorName: string;
+        invoiceFolderId: string;
+        processed: any[];
+        skipped: Array<{
+          reason: string;
+          invoice: any;
+          file_id?: string;
+        }>;
+      };
+    };
+  }>;
+}
+interface DocumentStatus {
+  success: boolean;
+  message?: string;
+  userId: string;
+  summary: {
+    totalDocuments: number;
+    completed: number;
+    failed: number;
+    pending: number;
+    processing: number;
+  };
+  documents: Array<{
+    fileId: string;
+    filename: string;
+    vendor: string;
+    status: "pending" | "processing" | "completed" | "failed";
+    error?: string;
+    attempts?: number;
+    lastAttempt?: string;
+    webViewLink?: string;
+  }>;
+  ocrStatus: {
+    by_status: string;
+  };
+}
+
 export interface Vendor {
   id: string;
   name: string;
@@ -192,6 +244,150 @@ export interface JobStatus {
 }
 
 // ===============================================
+// PROCESSING JOB TYPES (NEW - for persistent retry system)
+// ===============================================
+
+export interface ProcessingJobError {
+  message: string;
+  code?: string;
+  details?: any;
+  retryable: boolean;
+  stackTrace?: string;
+}
+
+export interface ProcessingJobProgress {
+  total: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface ProcessingJob {
+  jobId: string;
+  userId: string;
+  jobType: "EMAIL_FETCH" | "VENDOR_SYNC" | "OCR_RETRY" | "MANUAL_RETRY";
+  status: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED" | "RETRY_PENDING";
+  payload: any;
+  result?: any;
+  error?: ProcessingJobError;
+  retryCount: number;
+  maxRetries: number;
+  lastRetryAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  progress?: ProcessingJobProgress;
+}
+
+export interface ProcessingJobListResponse {
+  message: string;
+  userId: string;
+  total: number;
+  count: number;
+  limit: number;
+  offset: number;
+  filters: {
+    status: string;
+    jobType: string;
+  };
+  jobs: ProcessingJob[];
+}
+
+export interface RetryableJobsResponse {
+  message: string;
+  userId: string;
+  count: number;
+  jobs: ProcessingJob[];
+}
+
+// ===============================================
+// INVOICE PROCESSING STATUS TYPES (OCR Service)
+// ===============================================
+
+export interface InvoiceProcessingError {
+  phase: "download" | "ocr" | "chat";
+  message: string;
+  code?: string;
+  retryable: boolean;
+  timestamp: string;
+}
+
+export type InvoiceProcessingStatusType =
+  | "PENDING"
+  | "DOWNLOADING"
+  | "OCR_PROCESSING"
+  | "OCR_SUCCESS"
+  | "OCR_FAILED"
+  | "CHAT_INDEXING"
+  | "CHAT_FAILED"
+  | "COMPLETED";
+
+export interface InvoiceProcessingStatus {
+  user_id: string;
+  vendor_name: string;
+  drive_file_id: string;
+  file_name: string;
+  status: InvoiceProcessingStatusType;
+  ocr_attempt_count: number;
+  chat_attempt_count: number;
+  errors: InvoiceProcessingError[];
+  created_at: string;
+  updated_at: string;
+  download_started_at?: string;
+  ocr_started_at?: string;
+  ocr_completed_at?: string;
+  chat_started_at?: string;
+  chat_completed_at?: string;
+  vendor_folder_id?: string;
+  invoice_folder_id?: string;
+  web_view_link?: string;
+  ocr_result?: any;
+}
+
+export interface InvoiceStatusResponse {
+  success: boolean;
+  user_id: string;
+  vendor_name?: string;
+  total_count: number;
+  by_status: Record<string, InvoiceProcessingStatus[]>;
+  summary: Record<string, number>;
+}
+
+export interface InvoiceStatusSummaryResponse {
+  success: boolean;
+  user_id: string;
+  vendor_name?: string;
+  total: number;
+  by_status: Record<string, number>;
+  retryable: number;
+}
+
+export interface RetryInvoicesRequest {
+  userId: string;
+  vendorName?: string;
+  driveFileIds?: string[];
+  refreshToken: string;
+  maxOcrRetries?: number;
+  maxChatRetries?: number;
+}
+
+export interface RetryInvoicesResponse {
+  success: boolean;
+  message: string;
+  user_id: string;
+  vendor_name?: string;
+  total_failed: number;
+  retried: number;
+  max_retries_reached: number;
+  results: Array<{
+    vendor: string;
+    status: "completed" | "failed";
+    summary?: any;
+    error?: string;
+  }>;
+}
+
+// ===============================================
 // Helper wrapper (always uses API Gateway)
 // ===============================================
 async function apiCall<T>(
@@ -199,11 +395,11 @@ async function apiCall<T>(
   options?: RequestInit & { skipAuth?: boolean; timeout?: number }
 ): Promise<{ data: T; response: Response }> {
   const timeoutMs = options?.timeout || 120000; // Default 2 minutes
-  
+
   // Create AbortController for timeout
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  
+
   try {
     const response = await fetch(`${API_GATEWAY_URL}${fullPath}`, {
       ...options,
@@ -231,8 +427,8 @@ async function apiCall<T>(
 // AUTH APIs (via gateway /auth/...)
 // ===============================================
 
-export function getGoogleAuthUrl(): string {
-  return `${API_GATEWAY_URL}/email/auth/google`;
+export function getGoogleAuthUrl(userId: string): string {
+  return `${API_GATEWAY_URL}/email/auth/google?userId=${userId}`;
 }
 
 // ===============================================
@@ -253,11 +449,42 @@ export async function fetchEmails(
 
 /**
  * Check the status of an email fetch job
+ * @deprecated Use getProcessingJob instead - this is for backward compatibility
+ * Maps new ProcessingJob format to old JobStatus format
  */
 export async function getJobStatus(jobId: string) {
-  return apiCall<JobStatus>(
-    `/email/api/v1/email/jobs/${jobId}`
+  const { data: processingJob, response } = await apiCall<ProcessingJob>(
+    `/email/api/v1/processing/jobs/${jobId}`
   );
+
+  if (!response.ok) {
+    return { data: null as any, response };
+  }
+
+  // Map ProcessingJob to JobStatus for backward compatibility
+  const jobStatus: JobStatus = {
+    jobId: processingJob.jobId,
+    userId: processingJob.userId,
+    status: processingJob.status === "COMPLETED" ? "completed"
+      : processingJob.status === "FAILED" ? "failed"
+        : "processing",
+    filters: {
+      emails: processingJob.payload?.emails || null,
+      emailCount: processingJob.payload?.emailCount || 0,
+      onlyPdf: processingJob.payload?.onlyPdf ?? true,
+      fromDate: processingJob.payload?.fromDate || "",
+      forceSync: processingJob.payload?.forceSync ?? false,
+    },
+    createdAt: processingJob.createdAt,
+    completedAt: processingJob.completedAt,
+    result: processingJob.result,
+    error: processingJob.error ? {
+      message: processingJob.error.message,
+      timestamp: processingJob.updatedAt,
+    } : undefined,
+  };
+
+  return { data: jobStatus, response };
 }
 
 /**
@@ -279,10 +506,10 @@ export async function pollJobStatus(
 
   while (attempts < maxAttempts) {
     attempts++;
-    
+
     try {
       const { data, response } = await getJobStatus(jobId);
-      
+
       if (!response.ok) {
         throw new Error(`Failed to get job status: ${response.statusText}`);
       }
@@ -299,23 +526,23 @@ export async function pollJobStatus(
 
       // Still processing - wait before next poll
       await new Promise(resolve => setTimeout(resolve, interval));
-      
+
       // Exponential backoff (cap at maxInterval)
       interval = Math.min(interval * 1.5, maxInterval);
-      
+
     } catch (error) {
       // If it's a job completion error (failed status), throw it
       if (error instanceof Error && error.message.includes("Job failed")) {
         throw error;
       }
-      
+
       // For network errors, retry
       console.warn(`Poll attempt ${attempts} failed:`, error);
-      
+
       if (attempts >= maxAttempts) {
         throw new Error("Job polling timeout - max attempts reached");
       }
-      
+
       await new Promise(resolve => setTimeout(resolve, interval));
     }
   }
@@ -333,7 +560,7 @@ export async function fetchEmailsWithPolling(
 ): Promise<JobStatus> {
   // Start the job
   const { data: startResponse, response } = await fetchEmails(request);
-  
+
   if (!response.ok) {
     throw new Error(startResponse.message || "Failed to start email fetch");
   }
@@ -404,6 +631,19 @@ export async function getUserSyncStatus(userId: string) {
   return apiCall<SyncStatus>(`/email/api/v1/users/${userId}/sync-status`);
 }
 
+export async function processDocuments(userId: string) {
+  return apiCall<ProcessDocuments>('/email/api/v1/documents/process',{
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  });
+}
+
+export async function getDocumentStatus(userId: string) {
+  return apiCall<DocumentStatus>(`/email/api/v1/documents/status/${userId}`, {
+    method: "GET",
+  });
+}
+
 export async function resetUserSyncStatus(userId: string) {
   return apiCall(`/email/api/v1/users/${userId}/sync-status`, {
     method: "DELETE",
@@ -471,6 +711,121 @@ export async function getAnalytics(period: string, userId?: string) {
   );
 }
 
+// ===============================================
+// PROCESSING APIs (via gateway /email/api/v1/processing/...)
+// ===============================================
+
+/**
+ * Get a specific processing job by ID
+ */
+export async function getProcessingJob(jobId: string) {
+  return apiCall<ProcessingJob>(
+    `/email/api/v1/processing/jobs/${jobId}`
+  );
+}
+
+/**
+ * List all processing jobs for a user
+ */
+export async function listProcessingJobs(
+  userId: string,
+  options?: {
+    status?: string;
+    jobType?: string;
+    limit?: number;
+    offset?: number;
+  }
+) {
+  const params = new URLSearchParams();
+  if (options?.status) params.append("status", options.status);
+  if (options?.jobType) params.append("jobType", options.jobType);
+  if (options?.limit) params.append("limit", options.limit.toString());
+  if (options?.offset) params.append("offset", options.offset.toString());
+
+  const queryString = params.toString();
+  return apiCall<ProcessingJobListResponse>(
+    `/email/api/v1/processing/users/${userId}/jobs${queryString ? `?${queryString}` : ""}`
+  );
+}
+
+/**
+ * Get retryable (failed) jobs for a user
+ */
+export async function getRetryableJobs(userId: string) {
+  return apiCall<RetryableJobsResponse>(
+    `/email/api/v1/processing/users/${userId}/jobs/retryable`
+  );
+}
+
+/**
+ * Retry a failed processing job
+ */
+export async function retryProcessingJob(jobId: string) {
+  return apiCall<ProcessingJob>(
+    `/email/api/v1/processing/jobs/${jobId}/retry`,
+    { method: "POST" }
+  );
+}
+
+// ===============================================
+// INVOICE PROCESSING STATUS APIs (via gateway /ocr/...)
+// ===============================================
+
+/**
+ * Get invoice processing status
+ */
+export async function getInvoiceProcessingStatus(
+  userId: string,
+  vendorName?: string,
+  status?: string
+) {
+  const params = new URLSearchParams({ userId });
+  if (vendorName) params.append("vendorName", vendorName);
+  if (status) params.append("status", status);
+
+  return apiCall<InvoiceStatusResponse>(
+    `/ocr/api/v1/processing/status?${params.toString()}`
+  );
+}
+
+/**
+ * Get invoice processing status summary (counts)
+ */
+export async function getInvoiceProcessingStatusSummary(
+  userId: string,
+  vendorName?: string
+) {
+  const params = new URLSearchParams({ userId });
+  if (vendorName) params.append("vendorName", vendorName);
+
+  return apiCall<InvoiceStatusSummaryResponse>(
+    `/ocr/api/v1/processing/status/summary?${params.toString()}`
+  );
+}
+
+/**
+ * Retry failed invoice processing
+ */
+export async function retryInvoiceProcessing(request: RetryInvoicesRequest) {
+  return apiCall<RetryInvoicesResponse>(
+    `/ocr/api/v1/processing/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify(request),
+    }
+  );
+}
+
+/**
+ * Clear invoice processing status records for a user
+ */
+export async function clearInvoiceProcessingStatus(userId: string) {
+  return apiCall<{ success: boolean; deleted_count: number }>(
+    `/ocr/api/v1/processing/status?userId=${userId}`,
+    { method: "DELETE" }
+  );
+}
+
 export const api = {
   // Auth
   getGoogleAuthUrl,
@@ -480,14 +835,28 @@ export const api = {
   getJobStatus,
   pollJobStatus,
   fetchEmailsWithPolling,
+  processDocuments,
   getScheduledJobs,
   cancelScheduledJob,
+  getDocumentStatus,
   getUserSyncStatus,
   resetUserSyncStatus,
   disconnectGoogleAccount,
   getVendors,
   getInvoices,
   getVendorMaster,
+
+  // Processing Jobs (NEW)
+  getProcessingJob,
+  listProcessingJobs,
+  getRetryableJobs,
+  retryProcessingJob,
+
+  // Invoice Status (NEW)
+  getInvoiceProcessingStatus,
+  getInvoiceProcessingStatusSummary,
+  retryInvoiceProcessing,
+  clearInvoiceProcessingStatus,
 
   // Chat
   getChatAnswer,

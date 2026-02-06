@@ -4,9 +4,9 @@ import logger from "../utils/logger.js";
 
 const ROOT_FOLDER_NAME = "invoiceAutomation";
 
-function buildDriveClient(user) {
-  if (!user?.googleRefreshToken) {
-    throw new Error("User does not have a Google refresh token");
+function buildDriveClient(integration) {
+  if (!integration?.refresh_token) {
+    throw new Error("Integration does not have a Google refresh token");
   }
 
   const oauth2Client = new google.auth.OAuth2(
@@ -16,14 +16,14 @@ function buildDriveClient(user) {
   );
 
   oauth2Client.setCredentials({
-    refresh_token: user.googleRefreshToken,
+    refresh_token: integration.refresh_token,
   });
 
   return google.drive({ version: "v3", auth: oauth2Client });
 }
 
-export const saveToDrive = async (user, vendor, fileBuffer, fileName) => {
-  const drive = buildDriveClient(user);
+export const saveToDrive = async (integration, vendor, fileBuffer, fileName) => {
+  const drive = buildDriveClient(integration);
 
   const rootFolderId = await findOrCreateFolder(drive, ROOT_FOLDER_NAME);
 
@@ -32,11 +32,6 @@ export const saveToDrive = async (user, vendor, fileBuffer, fileName) => {
   const vendorFolderId = await findOrCreateFolder(drive, vendorFolderName, rootFolderId);
 
   const invoiceFolderId = await findOrCreateFolder(drive, "invoices", vendorFolderId);
-
-  // Previous logic skipped upload solely on matching file name. This caused
-  // loss of distinct invoices sharing a filename (e.g., "invoice.pdf").
-  // Drive allows multiple files with the same name; we now always upload.
-  // If you prefer renaming duplicates, implement suffix logic here.
 
   const mimeType = getMimeType(fileName);
 
@@ -67,8 +62,8 @@ export const saveToDrive = async (user, vendor, fileBuffer, fileName) => {
   };
 };
 
-export const listVendorFolders = async (user) => {
-  const drive = buildDriveClient(user);
+export const listVendorFolders = async (integration) => {
+  const drive = buildDriveClient(integration);
   const rootFolder = await findFolder(drive, ROOT_FOLDER_NAME);
 
   if (!rootFolder) {
@@ -89,12 +84,12 @@ export const listVendorFolders = async (user) => {
   }));
 };
 
-export const listVendorInvoices = async (user, vendorFolderId) => {
+export const listVendorInvoices = async (integration, vendorFolderId) => {
   if (!vendorFolderId) {
     throw new Error("Vendor folder ID is required");
   }
 
-  const drive = buildDriveClient(user);
+  const drive = buildDriveClient(integration);
   const invoiceFolder = await findFolder(drive, "invoices", vendorFolderId);
 
   if (!invoiceFolder) {
@@ -121,12 +116,12 @@ export const listVendorInvoices = async (user, vendorFolderId) => {
   return { vendorFolderId, invoiceFolderId: invoiceFolder.id, invoices };
 };
 
-export const getVendorMasterData = async (user, vendorFolderId) => {
+export const getVendorMasterData = async (integration, vendorFolderId) => {
   if (!vendorFolderId) {
     throw new Error("Vendor folder ID is required");
   }
 
-  const drive = buildDriveClient(user);
+  const drive = buildDriveClient(integration);
   const invoiceFolder = await findFolder(drive, "invoices", vendorFolderId);
 
   if (!invoiceFolder) {

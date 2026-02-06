@@ -7,12 +7,14 @@ import { Building2, RefreshCw, Folder, FileText, Calendar, Loader2, AlertCircle 
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { useVendors } from "@/hooks/use-vendors";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Vendors = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [userId, setUserId] = useState(() => localStorage.getItem("tempUserId") || "690c7d0ee107fb31784c1b1b");
+  const { user } = useAuth(); // Get authenticated user
+  const userId = user?.id || ""; // Use authenticated user's ID
   const [searchQuery, setSearchQuery] = useState("");
   const [vendorPage, setVendorPage] = useState(1);
 
@@ -21,9 +23,17 @@ const Vendors = () => {
   const vendors = data?.vendors || [];
   const total = data?.total || 0;
 
+  // Redirect to login if not authenticated
   useEffect(() => {
-    localStorage.setItem("tempUserId", userId);
-  }, [userId]);
+    if (!user) {
+      toast({
+        title: "Authentication Required",
+        description: "Please log in to view vendors",
+        variant: "destructive",
+      });
+      navigate('/login');
+    }
+  }, [user, navigate, toast]);
 
   // Show success toast when data is loaded
   useEffect(() => {

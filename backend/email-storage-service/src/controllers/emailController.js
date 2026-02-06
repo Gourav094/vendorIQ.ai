@@ -1,57 +1,63 @@
 import { fetchAndProcessEmails } from "../services/gmailService.js";
 import scheduleEmailJob, { getScheduledJobs, cancelScheduledJob } from "../services/schedulerService.js";
-import User from "../models/User.js";
+import GoogleIntegration from "../models/GoogleIntegration.js";
+import ProcessingJob from "../models/ProcessingJob.js";
 
 // ===============================================
-// IN-MEMORY JOB STORE (for manual fetch tracking)
+// PERSISTENT JOB FUNCTIONS (using MongoDB)
 // ===============================================
-const jobStore = new Map();
 
-function createJob(userId, filters) {
-  const jobId = `${userId}_${Date.now()}`;
-  jobStore.set(jobId, {
+async function createJob(userId, jobType, filters) {
+  const jobId = `${jobType}_${userId}_${Date.now()}`;
+
+  const job = await ProcessingJob.create({
     jobId,
     userId,
-    status: "processing",
-    filters,
-    createdAt: new Date().toISOString(),
-    result: null,
-    error: null
+    jobType,
+    status: "PENDING",
+    payload: filters,
+    createdAt: new Date(),
+    updatedAt: new Date()
   });
-  return jobId;
+
+  return job.jobId;
 }
 
-function updateJobSuccess(jobId, result) {
-  const job = jobStore.get(jobId);
+async function updateJobSuccess(jobId, result) {
+  const job = await ProcessingJob.findOne({ jobId });
   if (job) {
-    job.status = "completed";
-    job.result = result;
-    job.completedAt = new Date().toISOString();
+    await job.markAsCompleted(result);
   }
 }
 
-function updateJobError(jobId, error) {
-  const job = jobStore.get(jobId);
+async function updateJobError(jobId, error) {
+  const job = await ProcessingJob.findOne({ jobId });
   if (job) {
-    job.status = "failed";
-    job.error = error;
-    job.completedAt = new Date().toISOString();
+    await job.markAsFailed(error);
   }
 }
 
-export function getJobStatus(jobId) {
-  return jobStore.get(jobId) || null;
+async function updateJobProgress(jobId, progress) {
+  const job = await ProcessingJob.findOne({ jobId });
+  if (job) {
+    await job.updateProgress(progress);
+  }
+}
+
+export async function getJobStatus(jobId) {
+  const job = await ProcessingJob.findOne({ jobId }).lean();
+  return job || null;
 }
 
 export const fetchEmailsController = async (req, res) => {
   try {
-    const { 
-      userId, 
-      fromDate, 
-      schedule = "manual",   // Default manual mode
-      email,                 // Filter by vendor email address(es) - comma-separated
-      onlyPdf = true,        // Default: only PDF files
-      forceSync = false      // Force sync from fromDate instead of lastSyncedAt
+    const {
+      userId,           // auth_user_id from auth service
+      fromDate,
+      schedule = "manual",
+      email,
+      onlyPdf = true,
+      forceSync = false
     } = req.body;
 
     // Parse email parameter - support comma-separated multiple emails
@@ -64,75 +70,85 @@ export const fetchEmailsController = async (req, res) => {
     if (!userId || !fromDate) {
       return res.status(400).json({
         message: "Missing required fields: 'userId' and 'fromDate' are required.",
-        details: "Provide a valid MongoDB ObjectId for userId and a date or datetime (YYYY-MM-DD or ISO timestamp).",
+        details: "Provide a valid auth user ID from authentication service and a date or datetime (YYYY-MM-DD or ISO timestamp).",
         example: {
-          userId: "690c7d0ee107fb31784c1b1b",
+          userId: "678a1b2c3d4e5f6789abcdef",
           fromDate: "2024-01-01T10:30:00Z"
         }
       });
     }
 
-    // Validate userId format
-    if (!/^[a-f0-9]{24}$/i.test(userId)) {
-      return res.status(400).json({
-        message: "Invalid userId format.",
-        details: "userId must be a valid 24-character MongoDB ObjectId (hexadecimal).",
-        providedValue: userId
-      });
-    }
+    // Find Google integration for this user
+    const integration = await GoogleIntegration.findOne({ 
+      auth_user_id: userId,
+      provider: "google"
+    });
 
-    // Ensure user exists
-    const dbUser = await User.findById(userId);
-    if (!dbUser) {
-      return res.status(404).json({ 
-        message: "User not found in the database.",
-        details: "The provided userId does not match any registered user. Please complete Google OAuth authentication first by visiting /auth/google.",
+    if (!integration) {
+      return res.status(404).json({
+        message: "Google account not connected.",
+        details: "This user has not connected their Google account. Please authenticate first.",
+        action: "Connect your Google account at /auth/google to enable email sync.",
         userId: userId
       });
     }
 
-    // Check if user has Google connection
-    if (!dbUser.googleRefreshToken) {
+    // Check if integration is connected and has refresh token
+    if (integration.status !== "CONNECTED" || !integration.refresh_token) {
       return res.status(400).json({
-        message: "Google account not connected.",
-        details: "This user has not completed Google OAuth authentication. Please authenticate at /auth/google to grant Gmail and Drive access.",
-        action: "Visit http://localhost:4002/auth/google to connect your Google account."
+        message: "Google account not properly connected.",
+        details: "The Google integration is disconnected or missing required tokens.",
+        action: "Reconnect your Google account at /auth/google to grant Gmail and Drive access.",
+        status: integration.status
       });
     }
 
     // Log request details
-    console.log("Fetch request:", { 
-      userId, 
-      fromDate, 
-      emails: emailList || "ALL", 
+    console.log("Fetch request:", {
+      userId,
+      email: integration.email,
+      fromDate,
+      emails: emailList || "ALL",
       emailCount: emailList ? emailList.length : 0,
       onlyPdf,
       forceSync,
-      lastSyncedAt: dbUser.lastSyncedAt 
+      lastSyncedAt: integration.lastSyncedAt
     });
 
-    // Manual Fetch - NOW ASYNC WITH JOB TRACKING
+    // Manual Fetch - ASYNC WITH PERSISTENT JOB TRACKING
     if (schedule === "manual") {
-      const filters = { 
-        emails: emailList, 
-        emailCount: emailList ? emailList.length : 0, 
-        onlyPdf, 
-        fromDate, 
-        forceSync 
+      const filters = {
+        emails: emailList,
+        emailCount: emailList ? emailList.length : 0,
+        onlyPdf,
+        fromDate,
+        forceSync
       };
-      
-      const jobId = createJob(userId, filters);
-      
+
+      const jobId = await createJob(userId, "EMAIL_FETCH", filters);
+      const job = await ProcessingJob.findOne({ jobId });
+
       // Process in background
       setImmediate(async () => {
         try {
+          await job.markAsProcessing();
+
           const result = await fetchAndProcessEmails(userId, fromDate, { emails: emailList, onlyPdf, forceSync });
-          updateJobSuccess(jobId, result);
+
+          await updateJobSuccess(jobId, result);
+          await updateJobProgress(jobId, {
+            total: result.totalProcessed || 0,
+            completed: result.filesUploaded || 0,
+            failed: 0
+          });
+
           console.log(`✅ Job ${jobId} completed successfully`);
         } catch (error) {
           console.error(`❌ Job ${jobId} failed:`, error.message);
-          updateJobError(jobId, {
+          await updateJobError(jobId, {
             message: error.message,
+            code: error.code,
+            retryable: !error.message?.includes("Invalid") && !error.message?.includes("not found"),
             timestamp: new Date().toISOString()
           });
         }
@@ -143,7 +159,7 @@ export const fetchEmailsController = async (req, res) => {
         message: "Email fetch job started. Use the jobId to check status.",
         jobId,
         filtersUsed: filters,
-        statusEndpoint: `/api/v1/email/jobs/${jobId}`
+        statusEndpoint: `/api/v1/processing/jobs/${jobId}`
       });
     }
 
@@ -158,7 +174,7 @@ export const fetchEmailsController = async (req, res) => {
     }
 
     // Invalid schedule
-    return res.status(400).json({ 
+    return res.status(400).json({
       message: "Invalid schedule format.",
       details: "The 'schedule' parameter must be either 'manual' or an object with 'type' and 'frequency'.",
       validFormats: [
@@ -200,52 +216,16 @@ export const fetchEmailsController = async (req, res) => {
 };
 
 /**
- * Get job status by jobId
- */
-export const getJobStatusController = async (req, res) => {
-  try {
-    const { jobId } = req.params;
-
-    if (!jobId) {
-      return res.status(400).json({
-        message: "Job ID is required.",
-        details: "Please provide a valid job ID to check status."
-      });
-    }
-
-    const job = getJobStatus(jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        message: "Job not found.",
-        details: `No job found with ID ${jobId}. It may have expired or never existed.`,
-        jobId
-      });
-    }
-
-    return res.status(200).json(job);
-
-  } catch (error) {
-    console.error("Error in getJobStatusController:", error);
-    return res.status(500).json({
-      message: "Failed to retrieve job status.",
-      details: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-};
-
-/**
  * Get all scheduled jobs for a user
  */
 export const getScheduledJobsController = async (req, res) => {
   try {
     const { userId } = req.params;
 
-    if (!userId || !/^[a-f0-9]{24}$/.test(userId)) {
+    if (!userId) {
       return res.status(400).json({
         message: "Invalid user ID.",
-        details: "User ID must be a valid 24-character hexadecimal MongoDB ObjectId.",
+        details: "User ID is required.",
         providedValue: userId
       });
     }
@@ -274,10 +254,10 @@ export const cancelScheduledJobController = async (req, res) => {
   try {
     const { userId, jobId } = req.params;
 
-    if (!userId || !/^[a-f0-9]{24}$/.test(userId)) {
+    if (!userId) {
       return res.status(400).json({
         message: "Invalid user ID.",
-        details: "User ID must be a valid 24-character hexadecimal MongoDB ObjectId.",
+        details: "User ID is required.",
         providedValue: userId
       });
     }
@@ -290,7 +270,7 @@ export const cancelScheduledJobController = async (req, res) => {
     }
 
     const success = cancelScheduledJob(userId, jobId);
-    
+
     if (success) {
       return res.status(200).json({
         message: "Scheduled job cancelled successfully.",
