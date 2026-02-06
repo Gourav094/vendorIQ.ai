@@ -2,6 +2,7 @@ import express from "express";
 import { fetchEmailsController, getScheduledJobsController, cancelScheduledJobController } from "../controllers/emailController.js";
 import { getInvoicesByVendor, getVendorsByUser, getVendorMaster } from "../controllers/driveController.js";
 import { getUserSyncStatus, resetUserSyncStatus, disconnectGoogleAccount } from "../controllers/userController.js";
+import { processDocuments, getDocumentStatus, retryDocuments } from "../controllers/documentController.js";
 
 const router = express.Router();
 
@@ -245,7 +246,6 @@ router.get("/emails/schedule/:userId", getScheduledJobsController);
 router.delete("/emails/schedule/:userId/:jobId", cancelScheduledJobController);
 
 // Simple document processing endpoints
-import { processDocuments, getDocumentStatus } from "../controllers/documentController.js";
 
 /**
  * @route   POST /api/v1/documents/process
@@ -260,6 +260,17 @@ router.post("/documents/process", processDocuments);
  * @access  Public
  */
 router.get("/documents/status/:userId", getDocumentStatus);
+
+/**
+ * @route   POST /api/v1/documents/retry
+ * @desc    Retry failed or pending document processing
+ * @access  Public
+ * @body
+ *   - userId (required): string - MongoDB ObjectId
+ *   - vendorName (optional): string - Specific vendor to retry
+ *   - driveFileIds (optional): array - Specific file IDs to retry
+ */
+router.post("/documents/retry", retryDocuments);
 
 export default router;
 

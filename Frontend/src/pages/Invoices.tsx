@@ -39,8 +39,31 @@ const Invoices = () => {
   const { user } = useAuth(); // Get authenticated user
   
   const userId = user?.id || ""; // Use authenticated user's ID
-  const [vendorId, setVendorId] = useState(() => searchParams.get("vendorId") || "");
-  const [vendorName, setVendorName] = useState(() => searchParams.get("vendorName") || "");
+  
+  // Hybrid approach: Try URL params first, then fallback to localStorage
+  const urlVendorId = searchParams.get("vendorId");
+  const urlVendorName = searchParams.get("vendorName");
+  
+  const [vendorId, setVendorId] = useState(() => {
+    // Priority 1: URL params (for shareable links)
+    if (urlVendorId) {
+      localStorage.setItem('lastVendorId', urlVendorId);
+      if (urlVendorName) {
+        localStorage.setItem('lastVendorName', urlVendorName);
+      }
+      return urlVendorId;
+    }
+    // Priority 2: localStorage (for navigation back)
+    return localStorage.getItem('lastVendorId') || "";
+  });
+  
+  const [vendorName, setVendorName] = useState(() => {
+    if (urlVendorName) {
+      return urlVendorName;
+    }
+    return localStorage.getItem('lastVendorName') || "";
+  });
+  
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -196,7 +219,7 @@ const Invoices = () => {
       setIsLoading(false);
     }
   };
-
+  
   const fetchMasterSummary = async (selectedUserId: string, selectedVendorId: string) => {
     setIsMasterLoading(true);
     try {
@@ -371,7 +394,6 @@ const Invoices = () => {
     displayAmount: number;
     displayCurrency: string;
     displayAvailable: boolean;
-    status: string;
     processedDisplay: string;
     record: MasterRecord;
   };
@@ -389,7 +411,6 @@ const Invoices = () => {
     const totalAmount = parseAmount(
       getRecordField(record, ["total_amount", "totalAmount", "amount_due", "amountDue", "grand_total", "grandTotal"])
     );
-    const status = getRecordField(record, ["status", "payment_status", "paymentStatus"]);
     const processedAtValue = getRecordField(record, ["processed_at", "processedAt"]);
     const sourceCurrency = inferCurrency(record);
 
@@ -413,7 +434,6 @@ const Invoices = () => {
       displayAmount,
       displayCurrency,
       displayAvailable,
-      status: status ? String(status) : "Unknown",
       processedDisplay: processedAtValue ? formatDate(String(processedAtValue)) : "N/A",
       record,
     };
@@ -425,16 +445,6 @@ const Invoices = () => {
   const averageInvoiceValue = conversionEligibleRows.length
     ? totalAmountSum / conversionEligibleRows.length
     : 0;
-  const overdueCount = analyticsRows.filter((item) => {
-    if (!item.dueDateRaw || Number.isNaN(item.dueDateRaw.getTime())) return false;
-    return item.dueDateRaw < new Date();
-  }).length;
-
-  const statusBreakdown = analyticsRows.reduce<Record<string, number>>((acc, item) => {
-    const key = item.status || "Unknown";
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
 
   const conversionUnavailableCount = analyticsRows.length - conversionEligibleRows.length;
   const aggregateCurrency = currencyPreference;
@@ -447,24 +457,24 @@ const Invoices = () => {
   const analyticsCard =
     (isMasterLoading || masterSummary || masterError) && (
       <Card>
-        <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
+        <CardHeader className="flex-col space-y-4 sm:flex-row sm:items-center sm:justify-between sm:space-y-0">
+          <div className="space-y-1.5">
             <CardTitle>Vendor Analytics</CardTitle>
-            <CardDescription>
+            <CardDescription className="text-xs sm:text-sm">
               Insights derived from OCR processed master.json for this vendor. Base currency {BASE_CURRENCY}.
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor="currency-select" className="text-xs uppercase text-muted-foreground">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+            <Label htmlFor="currency-select" className="text-xs uppercase text-muted-foreground whitespace-nowrap">
               Currency
             </Label>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
               <Select
                 value={currencyPreference}
                 onValueChange={(value) => setCurrencyPreference(value as SupportedCurrency)}
                 disabled={ratesLoading}
               >
-                <SelectTrigger id="currency-select" className="w-[160px]">
+                <SelectTrigger id="currency-select" className="w-full sm:w-[160px]">
                   <SelectValue placeholder="Currency" />
                 </SelectTrigger>
                 <SelectContent>
@@ -476,7 +486,7 @@ const Invoices = () => {
                 </SelectContent>
               </Select>
               {ratesLoading && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
               )}
             </div>
           </div>
@@ -488,19 +498,19 @@ const Invoices = () => {
             </div>
           ) : masterError ? (
             <div className="flex items-center gap-3 rounded-md border border-dashed border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4" />
-              <span>{masterError}</span>
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <span className="break-words">{masterError}</span>
             </div>
           ) : masterSummary && (
             <>
               {ratesError && (
                 <div className="flex items-center gap-2 rounded-md border border-dashed border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                  <AlertCircle className="h-3.5 w-3.5" />
-                  <span>{ratesError}</span>
+                  <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                  <span className="break-words">{ratesError}</span>
                 </div>
               )}
               {ratesTimestamp && !ratesError && (
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground break-words">
                   Rates updated: {ratesTimestamp} (base {BASE_CURRENCY})
                 </p>
               )}
@@ -511,100 +521,77 @@ const Invoices = () => {
                   original currency.
                 </p>
               )}
-              <div className="grid gap-4 md:grid-cols-4">
-                <div className="rounded-md border px-4 py-3">
-                  <p className="text-xs uppercase text-muted-foreground">Processed Invoices</p>
-                  <p className="mt-1 text-2xl font-semibold">{analyticsRows.length}</p>
+              <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-md border px-3 py-2.5 sm:px-4 sm:py-3">
+                  <p className="text-[10px] sm:text-xs uppercase text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis">Processed Invoices</p>
+                  <p className="mt-1 text-xl sm:text-2xl font-semibold">{analyticsRows.length}</p>
                 </div>
-                <div className="rounded-md border px-4 py-3">
-                  <p className="text-xs uppercase text-muted-foreground flex items-center justify-between gap-2">
-                    <span>Total Amount</span>
-                    <span className="font-mono text-[10px] text-muted-foreground/80">{aggregateCurrency}</span>
-                  </p>
-                  <p className="mt-1 text-2xl font-semibold">
+                <div className="rounded-md border px-3 py-2.5 sm:px-4 sm:py-3">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <p className="text-[10px] sm:text-xs uppercase text-muted-foreground whitespace-nowrap">Total Amount</p>
+                    <span className="font-mono text-[9px] sm:text-[10px] text-muted-foreground/80 flex-shrink-0">{aggregateCurrency}</span>
+                  </div>
+                  <p className="text-xl sm:text-2xl font-semibold break-words overflow-hidden">
                     {conversionEligibleRows.length
                       ? formatAmount(totalAmountSum, aggregateCurrency)
                       : "N/A"}
                   </p>
                 </div>
-                <div className="rounded-md border px-4 py-3">
-                  <p className="text-xs uppercase text-muted-foreground flex items-center justify-between gap-2">
-                    <span>Average Invoice</span>
-                    <span className="font-mono text-[10px] text-muted-foreground/80">{aggregateCurrency}</span>
-                  </p>
-                  <p className="mt-1 text-2xl font-semibold">
+                <div className="rounded-md border px-3 py-2.5 sm:px-4 sm:py-3">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <p className="text-[10px] sm:text-xs uppercase text-muted-foreground whitespace-nowrap">Average Invoice</p>
+                    <span className="font-mono text-[9px] sm:text-[10px] text-muted-foreground/80 flex-shrink-0">{aggregateCurrency}</span>
+                  </div>
+                  <p className="text-xl sm:text-2xl font-semibold break-words overflow-hidden">
                     {conversionEligibleRows.length
                       ? formatAmount(averageInvoiceValue, aggregateCurrency)
                       : "N/A"}
                   </p>
                 </div>
-                <div className="rounded-md border px-4 py-3">
-                  <p className="text-xs uppercase text-muted-foreground">Invoices Past Due</p>
-                  <p className="mt-1 text-2xl font-semibold">{overdueCount}</p>
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-md border px-4 py-3">
-                  <p className="text-xs uppercase text-muted-foreground">Master Updated</p>
-                  <p className="mt-1 text-sm font-medium">
+                <div className="rounded-md border px-3 py-2.5 sm:px-4 sm:py-3">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <p className="text-[10px] sm:text-xs uppercase text-muted-foreground whitespace-nowrap">Master Updated</p>
+                  </div>
+                  <p className="font-mono text-[9px] sm:text-[10px] text-muted-foreground/80 flex-shrink-0">
                     {masterSummary.updatedAt ? formatDate(masterSummary.updatedAt) : "Not available"}
                   </p>
                 </div>
-                <div className="rounded-md border px-4 py-3">
-                  <p className="text-xs uppercase text-muted-foreground">Status Breakdown</p>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {Object.keys(statusBreakdown).length === 0 ? (
-                      <span className="text-sm text-muted-foreground">No status data</span>
-                    ) : (
-                      Object.entries(statusBreakdown).map(([status, count]) => (
-                        <Badge key={status} variant="outline" className="text-xs">
-                          {status}: {count}
-                        </Badge>
-                      ))
-                    )}
-                  </div>
-                </div>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-xs uppercase text-muted-foreground">
-                      <th className="py-2 pr-4">Invoice #</th>
-                      <th className="py-2 pr-4">Invoice Date</th>
-                      <th className="py-2 pr-4">Due Date</th>
-                      <th className="py-2 pr-4">Total</th>
-                      <th className="py-2 pr-4">Status</th>
-                      <th className="py-2 pr-4">Processed</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analyticsRows.map((row, index) => (
-                      <tr key={`master-row-${index}`} className="border-b last:border-b-0">
-                        <td className="py-2 pr-4 font-mono text-xs">{row.invoiceNumber}</td>
-                        <td className="py-2 pr-4">{row.invoiceDateDisplay}</td>
-                        <td className="py-2 pr-4">{row.dueDateDisplay}</td>
-                        <td className="py-2 pr-4 whitespace-nowrap">
-                          {row.displayAvailable ? (
-                            formatAmount(row.displayAmount, row.displayCurrency)
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              {formatAmount(row.rawAmount, row.sourceCurrency)}
-                              <span className="ml-1">(rate unavailable)</span>
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 pr-4">
-                          <Badge variant="secondary" className="text-xs">
-                            {row.status}
-                          </Badge>
-                        </td>
-                        <td className="py-2 pr-4">{row.processedDisplay}</td>
+              <div className="overflow-x-auto -mx-4 sm:-mx-6 px-4 sm:px-6">
+                <div className="inline-block min-w-full align-middle">
+                  <table className="w-full text-xs sm:text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-[10px] sm:text-xs uppercase text-muted-foreground">
+                        <th className="py-2 pr-2 sm:pr-4 whitespace-nowrap">Invoice #</th>
+                        <th className="py-2 pr-2 sm:pr-4 whitespace-nowrap">Invoice Date</th>
+                        <th className="py-2 pr-2 sm:pr-4 whitespace-nowrap">Due Date</th>
+                        <th className="py-2 pr-2 sm:pr-4 whitespace-nowrap">Total</th>
+                        <th className="py-2 pr-2 sm:pr-4 whitespace-nowrap">Processed</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {analyticsRows.map((row, index) => (
+                        <tr key={`master-row-${index}`} className="border-b last:border-b-0">
+                          <td className="py-2 pr-2 sm:pr-4 font-mono text-[10px] sm:text-xs whitespace-nowrap">{row.invoiceNumber}</td>
+                          <td className="py-2 pr-2 sm:pr-4 whitespace-nowrap">{row.invoiceDateDisplay}</td>
+                          <td className="py-2 pr-2 sm:pr-4 whitespace-nowrap">{row.dueDateDisplay}</td>
+                          <td className="py-2 pr-2 sm:pr-4 whitespace-nowrap">
+                            {row.displayAvailable ? (
+                              formatAmount(row.displayAmount, row.displayCurrency)
+                            ) : (
+                              <span className="text-[10px] sm:text-xs text-muted-foreground">
+                                {formatAmount(row.rawAmount, row.sourceCurrency)}
+                                <span className="ml-1">(rate unavailable)</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-2 sm:pr-4 whitespace-nowrap">{row.processedDisplay}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 {analyticsRows.length === 0 && (
                   <p className="py-4 text-center text-sm text-muted-foreground">
                     Master file available but no structured invoice data detected yet.
@@ -677,10 +664,15 @@ const Invoices = () => {
 
       {/* Vendor Info Badge */}
       {vendorName && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline" className="px-3 py-1 text-sm">
             Vendor: {vendorName}
           </Badge>
+          {!urlVendorId && vendorId && (
+            <Badge variant="secondary" className="px-3 py-1 text-xs">
+              📌 Last viewed
+            </Badge>
+          )}
         </div>
       )}
 

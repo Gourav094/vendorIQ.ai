@@ -313,14 +313,10 @@ export interface InvoiceProcessingError {
 }
 
 export type InvoiceProcessingStatusType =
-  | "PENDING"
-  | "DOWNLOADING"
-  | "OCR_PROCESSING"
-  | "OCR_SUCCESS"
-  | "OCR_FAILED"
-  | "CHAT_INDEXING"
-  | "CHAT_FAILED"
-  | "COMPLETED";
+  | "PENDING"      // Not processed yet - after email fetch, before OCR starts
+  | "PROCESSING"   // OCR is currently running - when OCR job begins
+  | "COMPLETED"    // OCR finished successfully - after master.json is created
+  | "FAILED";      // OCR started but failed - any error during processing
 
 export interface InvoiceProcessingStatus {
   user_id: string;
@@ -691,8 +687,11 @@ export async function getChatAnswer(question: string, vendorName?: string, userI
 
 export async function loadChatKnowledge(userId: string, incremental = true) {
   return apiCall(
-    `/chat/api/v1/knowledge/load?userId=${userId}&incremental=${incremental}`,
-    { method: "POST" }
+    `/chat/api/v1/sync`,
+    { 
+      method: "POST",
+      body: JSON.stringify({ user_id: userId })
+    }
   );
 }
 
@@ -817,6 +816,27 @@ export async function retryInvoiceProcessing(request: RetryInvoicesRequest) {
 }
 
 /**
+ * Retry documents via email service (securely handles refresh token)
+ */
+export async function retryDocumentsSecure(
+  userId: string,
+  vendorName?: string,
+  driveFileIds?: string[]
+) {
+  return apiCall<RetryInvoicesResponse>(
+    `/email/api/v1/documents/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        userId,
+        vendorName,
+        driveFileIds
+      }),
+    }
+  );
+}
+
+/**
  * Clear invoice processing status records for a user
  */
 export async function clearInvoiceProcessingStatus(userId: string) {
@@ -856,6 +876,7 @@ export const api = {
   getInvoiceProcessingStatus,
   getInvoiceProcessingStatusSummary,
   retryInvoiceProcessing,
+  retryDocumentsSecure,
   clearInvoiceProcessingStatus,
 
   // Chat

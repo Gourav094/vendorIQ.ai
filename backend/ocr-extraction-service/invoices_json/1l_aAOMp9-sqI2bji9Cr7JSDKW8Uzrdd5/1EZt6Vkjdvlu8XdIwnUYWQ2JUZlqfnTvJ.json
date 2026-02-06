@@ -1,0 +1,19 @@
+{
+    "vendor_name": "Garggourav012",
+    "invoice_number": "G06AI26I05237164",
+    "invoice_date": "30 Dec 2025",
+    "total_amount": "12122.0",
+    "line_items": [
+        {
+            "item_description": "Reservation Services For Air Transportation",
+            "quantity": "",
+            "unit_price": "",
+            "amount": "12122.0"
+        }
+    ],
+    "drive_file_id": "1EZt6Vkjdvlu8XdIwnUYWQ2JUZlqfnTvJ",
+    "file_name": "BOOKING_INVOICE.pdf",
+    "processed_at": "2026-02-06T17:44:16.272861+00:00",
+    "web_view_link": "https://drive.google.com/file/d/1EZt6Vkjdvlu8XdIwnUYWQ2JUZlqfnTvJ/view?usp=drivesdk",
+    "web_content_link": "https://drive.google.com/uc?id=1EZt6Vkjdvlu8XdIwnUYWQ2JUZlqfnTvJ&export=download"
+}

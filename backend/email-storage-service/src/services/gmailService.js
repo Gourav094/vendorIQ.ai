@@ -5,6 +5,7 @@ import crypto from "crypto";
 import GoogleIntegration from "../models/GoogleIntegration.js";
 import { saveToDrive } from "./driveService.js";
 import ProcessedAttachment from "../models/ProcessedAttachment.js";
+import Document from "../models/Document.js";
 import { detectVendor } from "../utils/vendorDetection.js";
 import logger from "../utils/logger.js";
 
@@ -179,6 +180,34 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
               webContentLink: uploadResult.webContentLink,
               sha256,
             });
+
+            // Create Document record for OCR/Chat tracking (ocrStatus: PENDING)
+            await Document.findOneAndUpdate(
+              { userId: integration.auth_user_id, driveFileId: uploadResult.fileId },
+              {
+                $set: {
+                  fileName: part.filename,
+                  vendorName: vendor,
+                  vendorFolderId: uploadResult.vendorFolderId,
+                  invoiceFolderId: uploadResult.invoiceFolderId,
+                  webViewLink: uploadResult.webViewLink,
+                  webContentLink: uploadResult.webContentLink,
+                  source: "email",
+                  gmailMessageId: msg.id,
+                  gmailAttachmentId: part.body.attachmentId,
+                  updatedAt: new Date(),
+                },
+                $setOnInsert: {
+                  userId: integration.auth_user_id,
+                  driveFileId: uploadResult.fileId,
+                  ocrStatus: "PENDING",
+                  indexed: false,
+                  indexVersion: 0,
+                  createdAt: new Date(),
+                }
+              },
+              { upsert: true }
+            );
           } catch (regErr) {
             logger.error("Failed to persist attachment registry", { regErr: regErr.message });
           }

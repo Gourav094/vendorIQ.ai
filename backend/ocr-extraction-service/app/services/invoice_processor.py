@@ -11,14 +11,11 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-from app.models.invoice_status import InvoiceProcessingStatus, ProcessingStatusStore
+from app.db import update_ocr_status
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
-
-# Initialize global status store
-_status_store = ProcessingStatusStore(storage_dir=os.getenv("PROCESSING_STATUS_DIR", "processing_status"))
 
 EMAIL_BASE = os.getenv("EMAIL_SERVICE_BASE_URL", "http://localhost:4002")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
@@ -27,7 +24,6 @@ OCR_PORT = int(os.getenv("OCR_PORT", "4003"))
 OCR_INTERNAL_BASE_URL = os.getenv("OCR_INTERNAL_BASE_URL", f"http://127.0.0.1:{OCR_PORT}")
 INVOICES_ROOT = os.getenv("INVOICES_JSON_FOLDER", "invoices_json")
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-CHAT_BASE = os.getenv("CHAT_SERVICE_BASE_URL", "http://localhost:4005/api/v1")
 
 
 def _ensure_folder(path: str) -> None:
@@ -107,67 +103,19 @@ def _write_master(path: str, payload: List[Dict]) -> None:
         json.dump(payload, handle, indent=4)
 
 
-async def _trigger_knowledge_indexing(user_id: str, incremental: bool = True, refresh_token: str | None = None) -> None:
-    """Fire-and-forget call to chat-service to (re)index vendor knowledge after new invoices processed.
-
-    The chat-service endpoint /knowledge/load will pull the remote master.json for the given user
-    (already uploaded to Drive) and update embeddings / analytics snapshots. We keep this lightweight
-    and non-blocking: failures are logged but do not raise.
-    """
-    if not user_id:
-        return
-    url = f"{CHAT_BASE}/knowledge/load"
-    params = {"userId": user_id, "incremental": incremental}
-    if refresh_token:
-        params["refreshToken"] = refresh_token
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(url, params=params)
-        if resp.status_code == 200:
-            logger.info("Triggered knowledge indexing", extra={"user_id": user_id, "incremental": incremental})
-        else:
-            logger.warning(
-                "Knowledge indexing trigger failed",
-                extra={"user_id": user_id, "status": resp.status_code, "body": resp.text[:300]},
-            )
-    except Exception as exc:
-        logger.error("Knowledge indexing trigger exception", exc_info=exc, extra={"user_id": user_id})
-
-
-async def _direct_ingest_vendor(user_id: str, vendor_name: str, records: List[Dict], incremental: bool) -> None:
-    """Push master records directly to chat-service ingest endpoint for immediate indexing."""
-    if not user_id or not vendor_name:
-        return
-    url = f"{CHAT_BASE}/knowledge/ingest"
-    payload = {
-        "userId": user_id,
-        "incremental": incremental,
-        "vendors": [
-            {"vendorName": vendor_name, "records": records}
-        ]
-    }
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=payload)
-        if resp.status_code == 200:
-            logger.info("Direct ingest success", extra={"vendor": vendor_name, "records": len(records)})
-        else:
-            logger.warning("Direct ingest failed", extra={"vendor": vendor_name, "status": resp.status_code, "body": resp.text[:300]})
-    except Exception as exc:
-        logger.error("Direct ingest exception", exc_info=exc, extra={"vendor": vendor_name})
-
-
-async def _upload_master_to_drive(folder_id: str, local_path: str, refresh_token: str) -> None:
+async def _upload_master_to_drive(folder_id: str, local_path: str, refresh_token: str) -> Optional[str]:
+    """Upload master.json to Drive and return the Drive path."""
     if not folder_id:
         logger.info("No Drive folder provided for master.json upload")
-        return
+        return None
 
     creds = _build_credentials(DRIVE_SCOPES, refresh_token)
     if not creds:
-        return
+        return None
 
     service = build("drive", "v3", credentials=creds)
 
+    # Remove existing master.json
     query = f"'{folder_id}' in parents and name='master.json' and trashed=false"
     try:
         result = service.files().list(q=query, fields="files(id)").execute()
@@ -180,10 +128,12 @@ async def _upload_master_to_drive(folder_id: str, local_path: str, refresh_token
     media = MediaFileUpload(local_path, mimetype="application/json")
 
     try:
-        service.files().create(body=metadata, media_body=media, fields="id").execute()
+        uploaded = service.files().create(body=metadata, media_body=media, fields="id").execute()
         logger.info("Uploaded master.json to Drive", extra={"folder_id": folder_id})
+        return f"{folder_id}/master.json"
     except Exception as exc:
         logger.error("Failed to upload master.json", exc_info=exc, extra={"folder_id": folder_id})
+        return None
 
 
 async def process_vendor_invoices(
@@ -194,6 +144,19 @@ async def process_vendor_invoices(
     refresh_token: str,
     vendor_folder_id: Optional[str] = None,
 ) -> Dict:
+    """
+    Process invoices for a vendor:
+    1. Check DB for document status (ocrStatus)
+    2. Only process if status is PENDING or FAILED
+    3. Download PDF from Drive using drive_file_id
+    4. Run OCR extraction
+    5. Write to master.json (local + Drive)
+    6. Update MongoDB with ocr_status=COMPLETED
+    
+    Database = source of truth for what needs processing
+    Google Drive = source of truth for files
+    Local storage = temporary cache only
+    """
     if not refresh_token:
         logger.error(
             "Refresh token required for vendor processing",
@@ -204,13 +167,11 @@ async def process_vendor_invoices(
             "vendorName": vendor_name,
             "invoiceFolderId": invoice_folder_id,
             "processed": [],
-            "skipped": [
-                {
-                    "reason": "missing refresh token",
-                    "invoice": None,
-                }
-            ],
+            "skipped": [{"reason": "missing refresh token", "invoice": None}],
         }
+    
+    from app.db import get_db
+    
     _ensure_folder(INVOICES_ROOT)
 
     folder_key = invoice_folder_id or vendor_folder_id or vendor_name or "default"
@@ -222,6 +183,10 @@ async def process_vendor_invoices(
     master_index = {str(entry.get("drive_file_id")): entry for entry in master_records if entry.get("drive_file_id")}
 
     processed, skipped = [], []
+
+    # Get database instance to check document status
+    db = get_db()
+    docs_collection = db["documents"]
 
     for invoice in invoices:
         file_id = str(invoice.get("fileId") or invoice.get("file_id") or invoice.get("id"))
@@ -238,60 +203,64 @@ async def process_vendor_invoices(
             skipped.append({"reason": "unsupported mime", "invoice": invoice})
             continue
 
-        if file_id in master_index:
-            skipped.append({"reason": "already processed", "invoice": invoice})
-            continue
+        # Check DB status - this is the source of truth!
+        doc_in_db = docs_collection.find_one({
+            "userId": user_id,
+            "driveFileId": file_id
+        })
 
-        # Initialize or load status for this invoice
-        status = _status_store.get_status(user_id, vendor_name, file_id)
-        if not status:
-            status = InvoiceProcessingStatus(
-                user_id=user_id,
-                vendor_name=vendor_name,
-                drive_file_id=file_id,
-                file_name=file_name,
-                vendor_folder_id=vendor_folder_id,
-                invoice_folder_id=invoice_folder_id,
-                web_view_link=web_view_link
-            )
-        
-        # Download phase
-        status.mark_downloading()
-        _status_store.save_status(status)
-        
+        if doc_in_db:
+            ocr_status = doc_in_db.get("ocrStatus", "PENDING")
+            
+            # Skip if already completed
+            if ocr_status == "COMPLETED":
+                skipped.append({"reason": "already completed (DB)", "invoice": invoice, "file_id": file_id})
+                continue
+            
+            # Skip if currently processing (avoid duplicate processing)
+            if ocr_status == "PROCESSING":
+                skipped.append({"reason": "already processing", "invoice": invoice, "file_id": file_id})
+                continue
+            
+            # Process if PENDING or FAILED
+            logger.info(f"Processing document with status {ocr_status}", extra={
+                "file_id": file_id,
+                "file_name": file_name,
+                "status": ocr_status
+            })
+        else:
+            # Document not in DB yet - this shouldn't happen in normal flow
+            logger.warning(f"Document not found in DB, will process anyway", extra={
+                "file_id": file_id,
+                "user_id": user_id
+            })
+
+        # Update MongoDB: OCR processing started
+        update_ocr_status(user_id, file_id, "PROCESSING")
+
+        # Always download from Drive - we don't cache PDFs locally
         pdf_bytes = await _download_pdf(file_id, refresh_token)
         if not pdf_bytes:
-            status.mark_ocr_failed("Failed to download PDF from Drive", retryable=True, code="DOWNLOAD_FAILED")
-            _status_store.save_status(status)
+            update_ocr_status(user_id, file_id, "FAILED", ocr_error="Failed to download PDF from Drive")
             skipped.append({"reason": "download failed", "invoice": invoice, "file_id": file_id})
             continue
 
-        # OCR phase
-        status.mark_ocr_processing()
-        _status_store.save_status(status)
-        
+        # Run OCR
         ocr_payload = await _run_invoice_ocr(file_name, pdf_bytes)
         if not ocr_payload or "error" in ocr_payload:
             error_msg = ocr_payload.get("error") if ocr_payload else "OCR extraction failed"
-            # Use retryable flag from OCR response, default to True if not specified
-            retryable = ocr_payload.get("retryable", True) if ocr_payload else True
-            status.mark_ocr_failed(error_msg, retryable=retryable, code="OCR_EXTRACTION_FAILED")
-            _status_store.save_status(status)
+            update_ocr_status(user_id, file_id, "FAILED", ocr_error=error_msg)
             skipped.append({"reason": "ocr failed", "invoice": invoice, "file_id": file_id, "error": error_msg})
             continue
-        
-        status.mark_ocr_success(ocr_payload)
-        _status_store.save_status(status)
 
+        # Enrich OCR result with metadata
         enriched = dict(ocr_payload)
-        enriched.update(
-            {
-                "drive_file_id": file_id,
-                "file_name": file_name,
-                "vendor_name": vendor_name,
-                "processed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+        enriched.update({
+            "drive_file_id": file_id,
+            "file_name": file_name,
+            "vendor_name": vendor_name,
+            "processed_at": datetime.now(timezone.utc).isoformat(),
+        })
         if web_view_link:
             enriched["web_view_link"] = web_view_link
         if web_content_link:
@@ -300,51 +269,37 @@ async def process_vendor_invoices(
         master_records.append(enriched)
         master_index[file_id] = enriched
 
+        # Write individual invoice JSON
         with open(os.path.join(local_folder, f"{file_id}.json"), "w", encoding="utf-8") as handle:
             json.dump(enriched, handle, indent=4)
 
         processed.append(file_id)
 
-    # Always write master locally first (even if empty) then direct-ingest before Drive upload
+    # Write master.json locally
     _write_master(master_path, master_records)
-    
-    # Track chat indexing for all processed invoices
+
+    # Upload master.json to Drive and get path
+    master_json_path = None
     if processed:
-        for file_id in processed:
-            status = _status_store.get_status(user_id, vendor_name, file_id)
-            if status and status.status == "OCR_SUCCESS":
-                status.mark_chat_indexing()
-                _status_store.save_status(status)
-    
-    try:
-        await _direct_ingest_vendor(user_id=user_id, vendor_name=vendor_name, records=master_records, incremental=bool(processed))
-        
-        # Mark chat indexing as successful for all processed invoices
-        if processed:
-            for file_id in processed:
-                status = _status_store.get_status(user_id, vendor_name, file_id)
-                if status and status.status == "CHAT_INDEXING":
-                    status.mark_completed()
-                    _status_store.save_status(status)
-    except Exception as exc:
-        logger.error("Direct ingest failed", exc_info=exc, extra={"vendor": vendor_name})
-        # Mark chat indexing as failed for processed invoices
-        if processed:
-            for file_id in processed:
-                status = _status_store.get_status(user_id, vendor_name, file_id)
-                if status and status.status == "CHAT_INDEXING":
-                    status.mark_chat_failed(str(exc), retryable=True, code="CHAT_INGEST_FAILED")
-                    _status_store.save_status(status)
+        master_json_path = await _upload_master_to_drive(invoice_folder_id, master_path, refresh_token)
+
+    # Update MongoDB for all processed invoices: ocr_status=COMPLETED, indexed=false
+    for file_id in processed:
+        update_ocr_status(
+            user_id=user_id,
+            drive_file_id=file_id,
+            ocr_status="COMPLETED",
+            master_json_path=master_json_path,
+        )
 
     if processed:
-        await _upload_master_to_drive(invoice_folder_id, master_path, refresh_token)
         logger.info(
-            "Processed invoices (+direct ingest)",
+            "Processed invoices (OCR complete, pending indexing)",
             extra={"vendor": vendor_name, "processed": len(processed), "skipped": len(skipped)},
         )
     else:
         logger.info(
-            "No new invoices to process (direct ingest sent existing master)",
+            "No new invoices to process",
             extra={"vendor": vendor_name, "skipped": len(skipped)},
         )
 
@@ -358,6 +313,7 @@ async def process_vendor_invoices(
 
 
 async def process_all_invoices(user_id: str, refresh_token: str) -> List[Dict]:
+    """Process all invoices for all vendors of a user."""
     results: List[Dict] = []
 
     if not refresh_token:
@@ -395,7 +351,5 @@ async def process_all_invoices(user_id: str, refresh_token: str) -> List[Dict]:
             )
             results.append(summary)
 
-    # Full sync no remote indexing trigger; direct ingest handled per vendor.
-    logger.info("Full invoice sync complete (direct ingest path)", extra={"user_id": user_id, "vendors": len(results)})
-
+    logger.info("Full invoice sync complete", extra={"user_id": user_id, "vendors": len(results)})
     return results

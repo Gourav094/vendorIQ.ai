@@ -65,14 +65,14 @@ const secondaryMenuItems = [
     icon: Mail,
   },
   {
-    title: "Scheduled Jobs",
-    url: "/scheduled-jobs",
-    icon: Clock,
-  },
-  {
     title: "Processing Status",
     url: "/processing-status",
     icon: Activity,
+  },
+  {
+    title: "Scheduled Jobs",
+    url: "/scheduled-jobs",
+    icon: Clock,
   },
 ];
 
