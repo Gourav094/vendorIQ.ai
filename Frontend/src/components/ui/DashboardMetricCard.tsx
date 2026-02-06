@@ -29,14 +29,14 @@ export function DashboardMetricCard({
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             {title}
           </p>
-          <p className="mt-2 text-4xl font-bold">{value}</p>
+          <p className="mt-2 text-2xl font-semibold">{value}</p>
           {change && (
             <p className={`mt-2 text-sm ${changeColors[changeType]}`}>
               {change}
             </p>
           )}
         </div>
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+        <div className="flex h-10 w-10 mx-1 items-center justify-center rounded-lg bg-primary/10">
           <Icon className="h-6 w-6 text-primary" />
         </div>
       </div>

@@ -25,7 +25,7 @@ export default function Analytics() {
   const [period, setPeriod] = useState("year");
   const [expandedVendors, setExpandedVendors] = useState(false);
   const queryClient = useQueryClient();
-  
+
   // Use React Query hook for analytics data
   const { data: analytics, isLoading, isError, error, isFetching, dataUpdatedAt } = useAnalytics(period);
 
@@ -37,14 +37,14 @@ export default function Analytics() {
     }
     return [
       {
-        title: "Highest Spend Vendor",
+        title: "Highest Spend",
         value: `₹${data.insights.highestSpend.amount.toLocaleString()}`,
         icon: TrendingUp,
         change: data.insights.highestSpend.vendor,
         changeType: "neutral",
       },
       {
-        title: "Average Invoice (INR)",
+        title: "Average Invoice",
         value: `₹${data.insights.averageInvoice.toLocaleString()}`,
         icon: IndianRupee,
         changeType: "positive",
@@ -56,7 +56,7 @@ export default function Analytics() {
         changeType: "positive",
       },
       {
-        title: "Total Spend (INR)",
+        title: "Total Spend",
         value: `₹${(data.insights.totalSpend || 0).toLocaleString()}`,
         icon: IndianRupee,
         changeType: "neutral",
@@ -86,7 +86,7 @@ export default function Analytics() {
     const now = Date.now();
     const diff = now - timestamp;
     const minutes = Math.floor(diff / 60000);
-    
+
     if (minutes < 1) return "just now";
     if (minutes < 60) return `${minutes} min ago`;
     const hours = Math.floor(minutes / 60);
@@ -141,10 +141,10 @@ export default function Analytics() {
             We couldn't find any analytics for your connected account yet.<br />
             Please sync your mail or connect your <Mail className="inline w-5 h-5 align-text-bottom text-red-500" aria-label="Gmail" /> account.<br />
             <Button onClick={() => window.location.href = '/settings'} variant="outline" size="lg">
-                <Mail className="h-4 w-4 mr-2 text-red-500" />
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Go to Settings
-              </Button>
+              <Mail className="h-4 w-4 mr-2 text-red-500" />
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Go to Settings
+            </Button>
             to check the status and sync your data.
           </p>
           {/* <div className="bg-blue-50 border border-blue-200 rounded p-3 text-blue-800 text-sm max-w-md">
@@ -160,7 +160,7 @@ export default function Analytics() {
   }
 
   return (
-    <div className="space-y-8 max-w-full overflow-x-hidden px-2 md:px-4">
+    <div className="space-y-8 max-w-full overflow-x-hidden m-2 py-2 md:px-4">
       {/* Header */}
       <div className="flex flex-col md:items- md:justify-between gap-4">
         <div className="flex flex-row items-center justify-between">
@@ -170,43 +170,43 @@ export default function Analytics() {
               Deep insights into your spending patterns
             </p>
             {dataUpdatedAt && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Last synced: {formatLastSync(dataUpdatedAt)}
-              {isFetching && <span className="ml-2 text-blue-600">• Updating...</span>}
-            </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Last synced: {formatLastSync(dataUpdatedAt)}
+                {isFetching && <span className="ml-2 text-blue-600">• Updating...</span>}
+              </p>
             )}
           </div>
           <div className="flex gap-2  ">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={isFetching}
-            className="flex items-center gap-2"
-          >
-            <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
-            {isFetching ? "Syncing..." : "Sync"}
-          </Button>
-          <Select value={period} onValueChange={(val) => setPeriod(val)}>
-            <SelectTrigger className="w-[180px]" data-testid="select-time-period">
-              <SelectValue placeholder="Time period" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="month">This Month</SelectItem>
-              <SelectItem value="quarter">This Quarter</SelectItem>
-              <SelectItem value="year">This Year</SelectItem>
-              <SelectItem value="all">All Time</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-          
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSync}
+              disabled={isFetching}
+              className="flex items-center gap-2"
+            >
+              <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+              {isFetching ? "Syncing..." : "Sync"}
+            </Button>
+            <Select value={period} onValueChange={(val) => setPeriod(val)}>
+              <SelectTrigger className="w-[180px]" data-testid="select-time-period">
+                <SelectValue placeholder="Time period" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="month">This Month</SelectItem>
+                <SelectItem value="quarter">This Quarter</SelectItem>
+                <SelectItem value="year">This Year</SelectItem>
+                <SelectItem value="all">All Time</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
         </div>
         {analytics.llmSummary && (
-            <div className="mt-3 text-sm leading-relaxed bg-muted/40 p-3 rounded-lg border">
-              <strong className="block mb-1">AI Summary:</strong>
-              <span>{analytics.llmSummary}</span>
-            </div>
-          )}
+          <div className="mt-3 text-sm leading-relaxed bg-muted/40 p-3 rounded-lg border">
+            <strong className="block mb-1">AI Summary:</strong>
+            <span>{analytics.llmSummary}</span>
+          </div>
+        )}
       </div>
 
       {/* Metric Cards */}
