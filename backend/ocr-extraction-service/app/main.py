@@ -5,12 +5,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from app.routes import base_routes, invoice_routes, pdf_ocr_routes, processing_routes, text_to_json
+from app.routes import base_routes, invoice_routes, pdf_ocr_routes, processing_routes, retry_routes, text_to_json
 
 load_dotenv()
 
 OCR_PORT = int(os.getenv("OCR_PORT", "4003"))
 INVOICES_JSON_FOLDER = os.getenv("INVOICES_JSON_FOLDER", "invoices_json")
+PROCESSING_STATUS_DIR = os.getenv("PROCESSING_STATUS_DIR", "processing_status")
 
 
 def ensure_folder_exists(path: str) -> None:
@@ -20,6 +21,7 @@ def ensure_folder_exists(path: str) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_folder_exists(INVOICES_JSON_FOLDER)
+    ensure_folder_exists(PROCESSING_STATUS_DIR)
     yield
 
 
@@ -39,6 +41,7 @@ app.include_router(pdf_ocr_routes.router, prefix=API_VERSION)
 app.include_router(text_to_json.router, prefix=API_VERSION)
 app.include_router(invoice_routes.router, prefix=API_VERSION)
 app.include_router(processing_routes.router)
+app.include_router(retry_routes.router)  # New retry endpoints
 
 
 @app.get("/")
@@ -50,4 +53,5 @@ if __name__ == "__main__":
     import uvicorn
 
     ensure_folder_exists(INVOICES_JSON_FOLDER)
+    ensure_folder_exists(PROCESSING_STATUS_DIR)
     uvicorn.run(app, host="0.0.0.0", port=OCR_PORT)

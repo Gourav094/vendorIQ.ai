@@ -159,11 +159,11 @@ const EmailSync = () => {
     }
   };
 
-  const connectGoogleAccount = () => {
-    addLog("info", "Redirecting to Google OAuth...");
-    // Use window.location for full page redirect (not new tab)
-    window.location.href = api.getGoogleAuthUrl();
-  };
+  // const connectGoogleAccount = () => {
+  //   addLog("info", "Redirecting to Google OAuth...");
+  //   // Use window.location for full page redirect (not new tab)
+  //   window.location.href = api.getGoogleAuthUrl();
+  // };
 
   const fetchEmails = async () => {
     if (!userId || !/^[a-f0-9]{24}$/i.test(userId)) {

@@ -63,6 +63,7 @@ services:
     volumes:
       - ocr_invoices_json:/app/invoices_json
       - ocr_invoices_pdf:/app/invoices_pdf
+      - ocr_processing_status:/app/processing_status
     networks:
       - vendoriq-network
     healthcheck:
@@ -146,5 +147,8 @@ volumes:
     driver: local
   ocr_invoices_pdf:
     driver: local
+  ocr_processing_status:
+    driver: local
   chat_vectordb:
     driver: local
+

@@ -2,7 +2,7 @@ import { google } from "googleapis";
 import axios from "axios";
 import crypto from "crypto";
 
-import User from "../models/User.js";
+import GoogleIntegration from "../models/GoogleIntegration.js";
 import { saveToDrive } from "./driveService.js";
 import ProcessedAttachment from "../models/ProcessedAttachment.js";
 import { detectVendor } from "../utils/vendorDetection.js";
@@ -12,8 +12,15 @@ const OCR_BASE_URL = process.env.OCR_SERVICE_BASE_URL || "http://localhost:4003"
 const OCR_TOKEN = process.env.OCR_TRIGGER_TOKEN;
 
 export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
-  const user = await User.findById(userId);
-  if (!user || !user.googleRefreshToken) throw new Error("No Gmail connected");
+  // userId is auth_user_id from auth service
+  const integration = await GoogleIntegration.findOne({ 
+    auth_user_id: userId,
+    provider: "google"
+  });
+
+  if (!integration || integration.status !== "CONNECTED" || !integration.refresh_token) {
+    throw new Error("No Gmail connected");
+  }
 
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -22,7 +29,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
   );
 
   oauth2Client.setCredentials({
-    refresh_token: user.googleRefreshToken,
+    refresh_token: integration.refresh_token,
   });
 
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
@@ -30,9 +37,9 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
   const { emails: emailList, onlyPdf = true, forceSync = false } = filters || {};
 
   // Determine fetch date: use fromDate if forceSync=true or lastSyncedAt is null
-  const fetchFrom = (forceSync || !user.lastSyncedAt)
+  const fetchFrom = (forceSync || !integration.lastSyncedAt)
     ? Math.floor(new Date(fromDate).getTime() / 1000)
-    : Math.floor(new Date(user.lastSyncedAt).getTime() / 1000);
+    : Math.floor(new Date(integration.lastSyncedAt).getTime() / 1000);
 
   // Build Gmail search query
   let query = `after:${fetchFrom} has:attachment`;
@@ -41,7 +48,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
   } else {
     query += ` (filename:pdf OR filename:jpg OR filename:jpeg OR filename:png)`;
   }
-  
+
   // Support multiple email addresses with OR logic
   if (emailList && emailList.length > 0) {
     if (emailList.length === 1) {
@@ -52,13 +59,14 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
     }
   }
 
-  logger.info(`Gmail search query: ${query}`, { 
-    userId, 
+  logger.info(`Gmail search query: ${query}`, {
+    userId,
+    userEmail: integration.email,
     fetchFrom: new Date(fetchFrom * 1000).toISOString(),
     emailFilters: emailList || "ALL",
     emailCount: emailList ? emailList.length : 0,
     forceSync,
-    lastSyncedAt: user.lastSyncedAt 
+    lastSyncedAt: integration.lastSyncedAt
   });
 
   const response = await gmail.users.messages.list({
@@ -70,18 +78,17 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
   logger.info(`Found ${emails.length} emails matching query`, { userId, query });
 
   if (emails.length === 0) {
-    logger.warn("No emails found matching the search criteria", { 
-      userId, 
-      query, 
+    logger.warn("No emails found matching the search criteria", {
+      userId,
+      query,
       fetchFrom: new Date(fetchFrom * 1000).toISOString(),
-      lastSyncedAt: user.lastSyncedAt 
+      lastSyncedAt: integration.lastSyncedAt
     });
   }
 
   let uploadedCount = 0;
   const uploadedFiles = []; // Track uploaded files details
   const vendorsDetected = new Set();
-  const ocrBatches = {}; // { vendorName: { vendorFolderId, invoiceFolderId, invoices: [] } }
 
   for (const msg of emails) {
     const message = await gmail.users.messages.get({
@@ -92,7 +99,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
     const headers = message.data.payload.headers;
     const fromHeader =
       headers.find((h) => h.name === "From")?.value || "Unknown";
-    const subjectHeader = 
+    const subjectHeader =
       headers.find((h) => h.name === "Subject")?.value || "";
     const vendor = detectVendor(fromHeader, subjectHeader);
     vendorsDetected.add(vendor);
@@ -109,7 +116,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
         if (!isAllowed) continue;
         // Duplicate prevention: check registry first
         const existing = await ProcessedAttachment.findOne({
-          userId: user._id,
+          userId: integration.auth_user_id,
           gmailMessageId: msg.id,
           gmailAttachmentId: part.body.attachmentId,
         });
@@ -141,7 +148,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
           });
           fileBuffer = Buffer.from(attachment.data.data, "base64");
           try {
-            uploadResult = await saveToDrive(user, vendor, fileBuffer, part.filename);
+            uploadResult = await saveToDrive(integration, vendor, fileBuffer, part.filename);
           } catch (error) {
             logger.error("Failed to save attachment to Drive", {
               userId,
@@ -157,10 +164,10 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
             const hash = crypto.createHash("sha256");
             hash.update(fileBuffer);
             sha256 = hash.digest("hex");
-          } catch (_) {}
+          } catch (_) { }
           try {
             await ProcessedAttachment.create({
-              userId: user._id,
+              userId: integration.auth_user_id,
               gmailMessageId: msg.id,
               gmailAttachmentId: part.body.attachmentId,
               vendor,
@@ -196,112 +203,31 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
           uploadedCount++;
         }
 
-        const vendorKey = uploadResult.vendorFolderId || vendor || "others";
-        if (!ocrBatches[vendorKey]) {
-          ocrBatches[vendorKey] = {
-            vendorName: uploadResult.vendorDisplayName || vendor,
-            vendorFolderId: uploadResult.vendorFolderId,
-            invoiceFolderId: uploadResult.invoiceFolderId,
-            refreshToken: user.googleRefreshToken,
-            invoices: [],
-          };
-        }
-
-        ocrBatches[vendorKey].invoices.push({
-          fileId: uploadResult.fileId,
-          fileName: part.filename,
-          mimeType: "application/pdf",
-          webViewLink: uploadResult.webViewLink || null,
-          webContentLink: uploadResult.webContentLink || null,
-        });
-
         logger.info(`Uploaded file ${uploadedCount}`, { vendor, filename: part.filename });
       }
     }
   }
 
-  await User.findByIdAndUpdate(userId, {
-    lastSyncedAt: new Date()  // Store current time as last successful sync
+  // Update lastSyncedAt on the integration
+  integration.lastSyncedAt = new Date();
+  await integration.save();
+
+  logger.info("Email fetch completed", {
+    userId,
+    totalEmailsProcessed: emails.length,
+    filesUploaded: uploadedCount,
+    vendorsDetected: Array.from(vendorsDetected)
   });
 
-  logger.info("Email fetch completed", { 
-    userId, 
-    totalEmailsProcessed: emails.length, 
-    filesUploaded: uploadedCount 
-  });
-
-  const ocrResults = [];
-  if (uploadedCount > 0 && Object.keys(ocrBatches).length > 0) {
-    for (const batch of Object.values(ocrBatches)) {
-      try {
-        const headers = OCR_TOKEN ? { "x-ocr-token": OCR_TOKEN } : {};
-        const payload = {
-          userId,
-          vendorName: batch.vendorName,
-          vendorFolderId: batch.vendorFolderId,
-          invoiceFolderId: batch.invoiceFolderId,
-          refreshToken: batch.refreshToken,
-          invoices: batch.invoices,
-        };
-
-        const payloadHash = crypto
-          .createHash("sha256")
-          .update(JSON.stringify(payload))
-          .digest("hex")
-          .slice(0, 16);
-
-        const tokenHash = batch.refreshToken
-          ? crypto.createHash("sha256").update(batch.refreshToken).digest("hex").slice(0, 16)
-          : "";
-
-        logger.info("Triggering OCR request", {
-          userId,
-          vendorName: batch.vendorName,
-          invoiceCount: batch.invoices.length,
-          payloadHash,
-          refreshTokenHash: tokenHash,
-          headers: Object.keys(headers).length ? Object.keys(headers) : "none",
-          url: `${OCR_BASE_URL}/api/v1/processing/vendor`,
-        });
-
-        const response = await axios.post(
-          `${OCR_BASE_URL}/api/v1/processing/vendor`,
-          payload,
-          {
-            headers,
-            timeout: 30000,
-          }
-        );
-        logger.info("OCR request completed", {
-          userId,
-          vendorName: batch.vendorName,
-          invoiceCount: batch.invoices.length,
-          payloadHash,
-          refreshTokenHash: tokenHash,
-          responseStatus: response.status,
-        });
-
-        ocrResults.push({ vendorName: batch.vendorName, status: response.data });
-      } catch (error) {
-        logger.error("Failed to trigger OCR", {
-          userId,
-          vendorName: batch.vendorName,
-          error: error.response?.data || error.message,
-        });
-        ocrResults.push({
-          vendorName: batch.vendorName,
-          status: "failed",
-          error: error.response?.data || error.message,
-        });
-      }
-    }
-  }
-
-  return { 
+  // Return uploaded files info - user will explicitly trigger processing later
+  return {
     totalProcessed: emails.length,
     filesUploaded: uploadedCount,
     uploadedFiles: uploadedFiles,
     vendorsDetected: Array.from(vendorsDetected),
-    ocrTriggers: ocrResults,
+    status: uploadedCount > 0 ? "ready_for_processing" : "no_documents_found",
+    message: uploadedCount > 0
+      ? `${uploadedCount} documents uploaded successfully. Ready for processing.`
+      : "No new documents found matching the criteria."
   };
 };

@@ -1,16 +1,74 @@
 # Email Storage Service
 
+Email fetching, processing, and Google Drive integration service for VendorIQ.
+
 ## Overview
 
 Email Storage Service connects a user's Google account, fetches invoice email attachments from Gmail, and stores them in Google Drive organized by vendor. It exposes endpoints to start Google OAuth, receive the OAuth callback, and fetch/process emails. The service persists Google OAuth tokens and sync metadata in MongoDB.
 
 **🎯 Multi-Vendor Support:** Automatically detects and organizes invoices from popular vendors including Amazon, Flipkart, Zomato, Swiggy, Uber, and more. The intelligent vendor detection system analyzes email addresses and subject lines to accurately categorize invoices.
 
-## Architecture
-- Node.js Express service
-- MongoDB for user documents and token storage
-- Google APIs (Gmail and Drive)
-- Incremental sync using `lastSyncedAt`
+## Architecture Overview
+
+### Database Separation
+This service uses a **separate MongoDB database** from the authentication service:
+- **Authentication Service**: Manages user accounts, login sessions, and JWT tokens
+- **Email Storage Service**: Manages Google OAuth integrations and email/drive data
+
+### User ID Flow
+1. User logs in via **Authentication Service** → receives `auth_user_id` (MongoDB ObjectId)
+2. User connects Google account via **Email Storage Service** → creates `GoogleIntegration` record linked by `auth_user_id`
+3. All email/drive operations use `auth_user_id` to lookup the Google integration
+
+## Data Models
+
+### GoogleIntegration Model
+Stores OAuth tokens and connection status for each user's Google account:
+
+```javascript
+{
+  _id: ObjectId,                    // Own database ID
+  auth_user_id: String,             // User ID from authentication service (required)
+  provider: String,                 // "google" (default)
+  email: String,                    // Google account email
+  access_token: String,             // Google OAuth access token
+  refresh_token: String,            // Google OAuth refresh token
+  status: String,                   // "CONNECTED" or "DISCONNECTED"
+  lastSyncedAt: Date,              // Last successful email fetch
+  connected_at: Date,              // When user connected Google
+  disconnected_at: Date            // When user disconnected (if applicable)
+}
+```
+
+**Unique Constraint**: `(auth_user_id + provider)` - prevents duplicate integrations
+
+### Connection Flow
+
+#### Connect Google Account
+```
+1. Frontend calls: GET /auth/google?userId={auth_user_id}
+2. User grants permissions on Google OAuth screen
+3. Google redirects to: /auth/google/callback?code=xxx&state={auth_user_id}
+4. Backend searches: GoogleIntegration.findOne({ auth_user_id, provider: "google" })
+5. IF EXISTS:
+     - Update tokens
+     - Set status = "CONNECTED"
+     - Set connected_at = now
+     - Clear disconnected_at
+   ELSE:
+     - Create new GoogleIntegration record
+```
+
+#### Disconnect Google Account
+```
+POST /api/v1/users/{auth_user_id}/disconnect-google
+
+Updates integration:
+- status = "DISCONNECTED"
+- access_token = null
+- refresh_token = null
+- disconnected_at = timestamp
+```
 
 ## Prerequisites
 - Google Cloud project with OAuth 2.0 Client ID (Web application)
@@ -128,6 +186,40 @@ Scopes requested:
 - `https://www.googleapis.com/auth/userinfo.email`
 - `openid`
 
+## API Endpoints
+
+### Authentication
+- `GET /auth/google?userId={auth_user_id}` - Initialize OAuth flow (requires auth_user_id from auth service)
+- `GET /auth/google/callback` - OAuth callback handler (internal use by Google)
+
+### User Management
+- `GET /api/v1/users/:userId/sync-status` - Get last sync time and connection status
+- `DELETE /api/v1/users/:userId/sync-status` - Reset sync status to re-fetch all emails
+- `POST /api/v1/users/:userId/disconnect-google` - Disconnect Google integration
+
+### Email Operations
+- `POST /api/v1/email/fetch` - Fetch emails and upload attachments to Drive
+  ```json
+  {
+    "userId": "auth_user_id_from_auth_service",
+    "fromDate": "2024-01-01",
+    "email": "vendor@example.com",
+    "onlyPdf": true,
+    "forceSync": false,
+    "schedule": "manual"
+  }
+  ```
+
+### Drive Operations
+- `GET /api/v1/drive/users/:userId/vendors` - List vendor folders
+- `GET /api/v1/drive/users/:userId/vendors/:vendorId/invoices` - List invoices for vendor
+- `GET /api/v1/drive/users/:userId/vendors/:vendorId/master` - Get master.json data
+
+### Processing
+- `GET /api/v1/processing/jobs/:jobId` - Get job status
+- `GET /api/v1/processing/users/:userId/jobs` - List all jobs for user
+- `POST /api/v1/processing/jobs/:jobId/retry` - Retry failed job
+
 ## Data Model
 `User` document fields (relevant subset):
 - `email` required and unique
@@ -135,91 +227,25 @@ Scopes requested:
 - `googleAccessToken` Google OAuth access token
 - `lastSyncedAt` Date of last successful sync for incremental fetching
 
-## API Endpoints
+### GoogleIntegration Model
+Stores OAuth tokens and connection status for each user's Google account:
 
-Health check
-- `GET /health`
-  - Returns service status JSON
-
-Get Google OAuth URL
-- `GET /auth/google`
-  - Returns a JSON object: `{ "url": "https://accounts.google.com/..." }`
-
-Google OAuth callback
-- `GET /auth/google/callback?code=...`
-  - Exchanges the authorization code for tokens, fetches user email, and stores or updates the user document
-  - Returns `{ "message": "Google account connected successfully!", "email": "user@example.com" }`
-
-Fetch and process emails
-- `POST /api/v1/email/fetch`
-  - Processes Gmail messages with attachments and uploads allowed file types to Drive in vendor-wise folders
-  - On success, updates `lastSyncedAt` to the current time for the user
-
-Request body example (filtering options):
 ```javascript
-// Option 1: Fetch all vendor emails
 {
-  "userId": "66fd0a3c8b1f4b2f7f0a1234",
-  "fromDate": "2024-01-01",
-  "schedule": "manual",
-  "onlyPdf": true
-}
-
-// Option 2: Single vendor email
-{
-  "userId": "66fd0a3c8b1f4b2f7f0a1234",
-  "fromDate": "2024-01-01",
-  "email": "ship-confirm@amazon.in",
-  "schedule": "manual"
-}
-
-// Option 3: Multiple vendor emails (comma-separated)
-{
-  "userId": "66fd0a3c8b1f4b2f7f0a1234",
-  "fromDate": "2024-01-01",
-  "email": "ship-confirm@amazon.in,orders@zomato.com,noreply@flipkart.com",
-  "schedule": "manual"
+  _id: ObjectId,                    // Own database ID
+  auth_user_id: String,             // User ID from authentication service (required)
+  provider: String,                 // "google" (default)
+  email: String,                    // Google account email
+  access_token: String,             // Google OAuth access token
+  refresh_token: String,            // Google OAuth refresh token
+  status: String,                   // "CONNECTED" or "DISCONNECTED"
+  lastSyncedAt: Date,              // Last successful email fetch
+  connected_at: Date,              // When user connected Google
+  disconnected_at: Date            // When user disconnected (if applicable)
 }
 ```
 
-Request body fields:
-- `userId` required, MongoDB ObjectId of the user that completed OAuth in this service
-- `fromDate` required, ISO date string used on first sync if `lastSyncedAt` is not set
-- `schedule` either `manual` for immediate processing, or a schedule object if you enable cron-based processing
-- `email` **optional** sender filter; single or comma-separated multiple vendor emails. Gmail will search for emails from ANY of the specified addresses (OR logic)
-- `onlyPdf` optional boolean; when true, only PDFs are processed; when false, allows `pdf`, `jpg`, `jpeg`, `png`
-
-**Filtering Flexibility:**
-- Omit `email` parameter to process all vendor emails
-- Single email: `"email": "ship-confirm@amazon.in"`
-- Multiple emails: `"email": "ship-confirm@amazon.in,orders@zomato.com,noreply@flipkart.com"`
-- Gmail uses OR logic: fetches emails from ANY of the specified addresses
-
-Response example:
-```
-{
-  "message": "Manual invoice fetch completed.",
-  "filtersUsed": {
-    "vendor": "Amazon",
-    "email": "no-reply@amazon.in",
-    "onlyPdf": true,
-    "fromDate": "2024-01-01"
-  },
-  "result": {
-    "totalProcessed": 12
-  }
-}
-```
-
-List vendor folders for a user
-- `GET /api/v1/drive/users/:userId/vendors`
-  - Returns every vendor folder detected under `invoiceAutomation` for the user’s Google Drive
-  - Response payload: `{ "userId": "...", "total": 2, "vendors": [{ "id": "<folderId>", "name": "Amazon" }] }`
-
-List invoices for a vendor folder
-- `GET /api/v1/drive/users/:userId/vendors/:vendorId/invoices`
-  - `vendorId` is the Drive folder ID returned from the vendor list endpoint
-  - Returns `{ "userId": "...", "vendorFolderId": "...", "invoiceFolderId": "...", "total": 5, "invoices": [{ "id": "...", "name": "INV-001.pdf" }] }`
+**Unique Constraint**: `(auth_user_id + provider)` - prevents duplicate integrations
 
 ## Processing Logic
 - Query Gmail using a search string built from `after:<timestamp> has:attachment` plus filename filters and optional `from:` filter

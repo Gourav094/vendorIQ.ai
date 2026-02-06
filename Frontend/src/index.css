@@ -136,3 +136,51 @@ All colors MUST be HSL.
     @apply bg-background text-foreground;
   }
 }
+
+
+.react-datepicker {
+  background-color: hsl(var(--background)) !important;
+  border-color: hsl(var(--border)) !important;
+}
+
+.react-datepicker__header {
+  background-color: hsl(var(--muted)) !important;
+  border-bottom-color: hsl(var(--border)) !important;
+}
+
+.react-datepicker__current-month,
+.react-datepicker__day-name,
+.react-datepicker__day {
+  color: hsl(var(--foreground)) !important;
+}
+
+.react-datepicker__day:hover {
+  background-color: hsl(var(--accent)) !important;
+  color: hsl(var(--accent-foreground)) !important;
+}
+
+.react-datepicker__day--selected {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+.react-datepicker__time-container,
+.react-datepicker__time-list {
+  background-color: hsl(var(--background)) !important;
+  border-left-color: hsl(var(--border)) !important;
+}
+
+.react-datepicker-time__header,
+.react-datepicker__time-list-item {
+  color: hsl(var(--foreground)) !important;
+}
+
+.react-datepicker__time-list-item:hover {
+  background-color: hsl(var(--accent)) !important;
+  color: hsl(var(--accent-foreground)) !important;
+}
+
+.react-datepicker__time-list-item--selected {
+  background-color: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}

@@ -6,13 +6,14 @@ import { useResizableSidebar } from "@/hooks/use-resizable-sidebar";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useEffect } from "react";
 import Settings from "@/pages/Settings";
-import EmailSync from "@/pages/EmailSync";
+import EmailSync from "@/pages/EmailSync_simplified";
 import ScheduledJobs from "@/pages/ScheduledJobs";
 import Vendors from "@/pages/Vendors";
 import Invoices from "@/pages/Invoices";
 import NotFound from "@/pages/NotFound";
 import Analytics from "@/pages/Analytics";
-import AIAssistant from "@/pages/AIAssistant";  
+import AIAssistant from "@/pages/AIAssistant";
+import ProcessingStatus from "@/pages/ProcessingStatus";
 
 const ProtectedRoutes = () => {
   const { sidebarWidth, isResizing, startResizing, stopResizing } = useResizableSidebar({
@@ -69,9 +70,8 @@ const ProtectedLayout = ({
         {/* Resize handle only when desktop & expanded */}
         {!isMobile && !isCollapsed && (
           <div
-            className={`absolute top-0 right-0 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${
-              isResizing ? 'bg-primary/30 w-2' : 'w-1'
-            }`}
+            className={`absolute top-0 right-0 h-full cursor-col-resize hover:bg-primary/20 transition-colors ${isResizing ? 'bg-primary/30 w-2' : 'w-1'
+              }`}
             onMouseDown={startResizing}
             style={{ zIndex: 10 }}
           />
@@ -85,7 +85,7 @@ const ProtectedLayout = ({
               if (isResizing) stopResizing();
             }}
           />
-            <ThemeToggle />
+          <ThemeToggle />
         </header>
         <main className="flex-1 overflow-auto ">
           <div className="max-w-9xl mx-auto p-2">
@@ -96,9 +96,10 @@ const ProtectedLayout = ({
               <Route path="/scheduled-jobs" element={<ScheduledJobs />} />
               <Route path="/vendors" element={<Vendors />} />
               <Route path="/invoices" element={<Invoices />} />
-              <Route path="/analytics" element={<Analytics/>} />
+              <Route path="/analytics" element={<Analytics />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/ai-assistant" element={<AIAssistant />} />
+              <Route path="/processing-status" element={<ProcessingStatus />} />
 
               {/* Prevent unknown routes */}
               <Route path="/login" element={<Navigate to="/" replace />} />

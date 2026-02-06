@@ -2,6 +2,8 @@ from typing import List, Optional
 import os
 from dotenv import load_dotenv
 import google.generativeai as genai
+import httpx
+import json
 
 load_dotenv()  # Ensure .env is loaded even if config not imported yet
 
@@ -72,5 +74,100 @@ class GeminiLLM:
         return self.generate(user_prompt, system_prompt)
 
 
-def get_llm_instance() -> GeminiLLM:
-    return GeminiLLM()
+class OllamaLLM:
+    """Local LLM implementation using Ollama API"""
+    
+    def __init__(self, base_url: str, model: str, temperature: float = 0.7, max_tokens: int = 512):
+        self.base_url = base_url.rstrip('/')
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self._verify_connection()
+    
+    def _verify_connection(self):
+        """Verify Ollama is running and model is available"""
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                response = client.get(f"{self.base_url}/api/tags")
+                if response.status_code == 200:
+                    models = response.json().get("models", [])
+                    model_names = [m.get("name") for m in models]
+                    if self.model not in model_names:
+                        print(f"⚠️  Warning: Model '{self.model}' not found in Ollama. Available: {model_names}")
+                        print(f"   Run: ollama pull {self.model}")
+                    else:
+                        print(f"✅ Ollama connected: {self.base_url} | Model: {self.model}")
+                else:
+                    print(f"⚠️  Ollama API returned status {response.status_code}")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not connect to Ollama at {self.base_url}")
+            print(f"   Make sure Ollama is running: ollama serve")
+            print(f"   Error: {e}")
+    
+    def generate(self, prompt: str, system: Optional[str] = None) -> str:
+        """Generate text using Ollama API"""
+        try:
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": self.temperature,
+                    "num_predict": self.max_tokens,
+                }
+            }
+            
+            if system:
+                payload["system"] = system
+            
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.base_url}/api/generate",
+                    json=payload
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get("response", "").strip()
+                else:
+                    return f"Error: Ollama API returned status {response.status_code}"
+                    
+        except httpx.TimeoutException:
+            return "Error: Request to Ollama timed out. The model may be too slow or overloaded."
+        except Exception as e:
+            return f"Error generating content with Ollama: {str(e)}"
+    
+    def chat(self, messages: List[dict]) -> str:
+        """Chat interface for Ollama"""
+        system_prompt = next((m["content"] for m in messages if m.get("role") == "system"), "")
+        user_messages = [m["content"] for m in messages if m.get("role") == "user"]
+        
+        if not user_messages:
+            return "No user message provided."
+        
+        user_prompt = "\n".join(user_messages)
+        return self.generate(user_prompt, system_prompt)
+
+
+def get_llm_instance():
+    """Factory function to get the appropriate LLM instance based on configuration"""
+    from app.config import (
+        USE_LOCAL_LLM, 
+        LOCAL_LLM_BASE_URL, 
+        LOCAL_LLM_MODEL,
+        LOCAL_LLM_TEMPERATURE,
+        LOCAL_LLM_MAX_TOKENS,
+        GEMINI_MODEL_NAME
+    )
+    
+    if USE_LOCAL_LLM:
+        print(f"🔧 Using LOCAL LLM (Ollama): {LOCAL_LLM_MODEL}")
+        return OllamaLLM(
+            base_url=LOCAL_LLM_BASE_URL,
+            model=LOCAL_LLM_MODEL,
+            temperature=LOCAL_LLM_TEMPERATURE,
+            max_tokens=LOCAL_LLM_MAX_TOKENS
+        )
+    else:
+        print(f"☁️  Using CLOUD LLM (Gemini): {GEMINI_MODEL_NAME}")
+        return GeminiLLM()

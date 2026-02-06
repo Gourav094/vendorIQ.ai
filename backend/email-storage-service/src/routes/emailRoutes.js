@@ -1,5 +1,5 @@
 import express from "express";
-import { fetchEmailsController, getScheduledJobsController, cancelScheduledJobController, getJobStatusController } from "../controllers/emailController.js";
+import { fetchEmailsController, getScheduledJobsController, cancelScheduledJobController } from "../controllers/emailController.js";
 import { getInvoicesByVendor, getVendorsByUser, getVendorMaster } from "../controllers/driveController.js";
 import { getUserSyncStatus, resetUserSyncStatus, disconnectGoogleAccount } from "../controllers/userController.js";
 
@@ -42,13 +42,9 @@ const router = express.Router();
 router.post("/email/fetch", fetchEmailsController);
 
 /**
- * @route   GET /api/v1/email/jobs/:jobId
- * @desc    Check the status of an email fetch job
- * @access  Public
- * @returns {200} Success - Job status with result or error
- * @returns {404} Not Found - Job not found
+ * NOTE: Job status endpoints have been moved to /api/v1/processing/jobs/:jobId
+ * See processingJobRoutes.js for persistent job tracking and retry functionality
  */
-router.get("/email/jobs/:jobId", getJobStatusController);
 
 /**
  * @route   GET /api/v1/drive/users/:userId/vendors
@@ -248,4 +244,22 @@ router.get("/emails/schedule/:userId", getScheduledJobsController);
  */
 router.delete("/emails/schedule/:userId/:jobId", cancelScheduledJobController);
 
+// Simple document processing endpoints
+import { processDocuments, getDocumentStatus } from "../controllers/documentController.js";
+
+/**
+ * @route   POST /api/v1/documents/process
+ * @desc    Process all fetched documents with OCR (simple user-triggered flow)
+ * @access  Public
+ */
+router.post("/documents/process", processDocuments);
+
+/**
+ * @route   GET /api/v1/documents/status/:userId
+ * @desc    Get simple document processing status for a user
+ * @access  Public
+ */
+router.get("/documents/status/:userId", getDocumentStatus);
+
 export default router;
+
