@@ -36,16 +36,18 @@ const Invoices = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user } = useAuth(); // Get authenticated user
+  const { user } = useAuth();
   
-  const userId = user?.id || ""; // Use authenticated user's ID
+  const userId = user?.id || "";
+  
+  // Cache duration: 5 minutes
+  const CACHE_DURATION = 5 * 60 * 1000;
   
   // Hybrid approach: Try URL params first, then fallback to localStorage
   const urlVendorId = searchParams.get("vendorId");
   const urlVendorName = searchParams.get("vendorName");
   
   const [vendorId, setVendorId] = useState(() => {
-    // Priority 1: URL params (for shareable links)
     if (urlVendorId) {
       localStorage.setItem('lastVendorId', urlVendorId);
       if (urlVendorName) {
@@ -53,7 +55,6 @@ const Invoices = () => {
       }
       return urlVendorId;
     }
-    // Priority 2: localStorage (for navigation back)
     return localStorage.getItem('lastVendorId') || "";
   });
   
@@ -75,6 +76,7 @@ const Invoices = () => {
   const [ratesLoading, setRatesLoading] = useState(false);
   const [ratesError, setRatesError] = useState<string | null>(null);
   const [ratesTimestamp, setRatesTimestamp] = useState<string | null>(null);
+  const [loadedFromCache, setLoadedFromCache] = useState(false);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -90,7 +92,7 @@ const Invoices = () => {
 
   useEffect(() => {
     if (userId && vendorId) {
-      fetchInvoices();
+      loadInvoicesWithCache();
     }
   }, [userId, vendorId]);
 
@@ -159,6 +161,43 @@ const Invoices = () => {
     };
   }, []);
 
+  const getCacheKey = (vId: string) => `invoice_cache_${userId}_${vId}`;
+
+  const loadInvoicesWithCache = async (forceRefresh = false) => {
+    if (!userId || !vendorId) return;
+
+    const cacheKey = getCacheKey(vendorId);
+    const cachedData = localStorage.getItem(cacheKey);
+
+    // Try to load from cache first
+    if (!forceRefresh && cachedData) {
+      try {
+        const parsed = JSON.parse(cachedData);
+        const cacheAge = Date.now() - parsed.timestamp;
+
+        // If cache is still fresh (< 5 minutes)
+        if (cacheAge < CACHE_DURATION) {
+          setInvoices(parsed.invoices || []);
+          setMasterSummary(parsed.masterSummary || null);
+          setMasterError(parsed.masterError || null);
+          setLoadedFromCache(true);
+          
+          toast({
+            title: "📦 Loaded from cache",
+            description: `Showing cached data (${Math.round(cacheAge / 1000)}s old). Click Refresh for latest data.`,
+          });
+          return; 
+        }
+      } catch (error) {
+        console.error("Cache parse error:", error);
+        // Continue to fetch if cache is invalid
+      }
+    }
+
+    // Cache miss or expired - fetch fresh data
+    await fetchInvoices();
+  };
+
   const fetchInvoices = async () => {
     if (!userId || !/^[a-f0-9]{24}$/i.test(userId)) {
       toast({
@@ -181,6 +220,8 @@ const Invoices = () => {
     setIsLoading(true);
     setMasterSummary(null);
     setMasterError(null);
+    setLoadedFromCache(false);
+    
     try {
       const { data, response } = await api.getInvoices(userId, vendorId);
 
@@ -200,7 +241,29 @@ const Invoices = () => {
         }
 
         await fetchMasterSummary(userId, vendorId);
+
+        // ONLY cache successful data - check if masterError is null after fetchMasterSummary
+        const cacheKey = getCacheKey(vendorId);
+        // Wait a bit for state to update, then check masterError
+        setTimeout(() => {
+          if (!masterError) {
+            localStorage.setItem(
+              cacheKey,
+              JSON.stringify({
+                timestamp: Date.now(),
+                invoices: data.invoices || [],
+                masterSummary: masterSummary,
+              })
+            );
+          } else {
+            // Error in master data - clear cache so next visit retries
+            localStorage.removeItem(cacheKey);
+          }
+        }, 100);
       } else {
+        // API error - clear cache
+        const cacheKey = getCacheKey(vendorId);
+        localStorage.removeItem(cacheKey);
         toast({
           title: "⚠️ Unable to Load Invoices",
           description:
@@ -211,6 +274,9 @@ const Invoices = () => {
         });
       }
     } catch (error) {
+      // Network error - clear cache
+      const cacheKey = getCacheKey(vendorId);
+      localStorage.removeItem(cacheKey);
       toast({
         title: "🔌 Connection Failed",
         description: "Cannot reach the email service. Please ensure the backend is running on port 4002.",
@@ -225,14 +291,35 @@ const Invoices = () => {
     try {
       const { data, response } = await api.getVendorMaster(selectedUserId, selectedVendorId);
       if (!response.ok) {
-        setMasterError(
-          (data as any).message || data.reason || "Master data not available for this vendor yet."
-        );
+        const error = (data as any).message || data.reason || "Master data not available for this vendor yet.";
+        setMasterError(error);
         setMasterSummary(null);
+        
+        // Update cache with error state
+        const cacheKey = getCacheKey(selectedVendorId);
+        const existingCache = localStorage.getItem(cacheKey);
+        if (existingCache) {
+          const parsed = JSON.parse(existingCache);
+          parsed.masterError = error;
+          parsed.masterSummary = null;
+          localStorage.setItem(cacheKey, JSON.stringify(parsed));
+        }
         return;
       }
 
       setMasterSummary(data);
+      setMasterError(null);
+      
+      // Update cache with successful master data
+      const cacheKey = getCacheKey(selectedVendorId);
+      const existingCache = localStorage.getItem(cacheKey);
+      if (existingCache) {
+        const parsed = JSON.parse(existingCache);
+        parsed.masterSummary = data;
+        parsed.masterError = null;
+        localStorage.setItem(cacheKey, JSON.stringify(parsed));
+      }
+      
       if (data.records?.length) {
         toast({
           title: "📊 Analytics Ready",
@@ -619,7 +706,7 @@ const Invoices = () => {
             </p>
           </div>
         </div>
-        <Button onClick={fetchInvoices} disabled={isLoading || !vendorId}>
+        <Button onClick={() => loadInvoicesWithCache(true)} disabled={isLoading || !vendorId}>
           <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
