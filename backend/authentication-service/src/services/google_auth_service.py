@@ -44,7 +44,12 @@ class GoogleAuthService:
 
     def verify_token(self, token):
         try:
-            return id_token.verify_oauth2_token(token, requests.Request(), self.client_id)
+            print(f"Verifying token with client_id: {self.client_id}")
+            print(f"Token (first 50 chars): {token[:50] if token else 'None'}...")
+            result = id_token.verify_oauth2_token(token, requests.Request(), self.client_id)
+            print(f"Token verified successfully: {result.get('email')}")
+            return result
         except Exception as e:
-            print("Token verification failed:", e)
+            print(f"Token verification failed: {type(e).__name__}: {e}")
+            print(f"Client ID used: {self.client_id}")
             return None

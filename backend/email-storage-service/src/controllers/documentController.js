@@ -20,7 +20,7 @@ export const processDocuments = async (req, res) => {
             });
         }
 
-        const integration = await GoogleIntegration.findOne({ 
+        const integration = await GoogleIntegration.findOne({
             auth_user_id: userId,
             provider: "google"
         });
@@ -214,6 +214,86 @@ export const getDocumentStatus = async (req, res) => {
             success: false,
             message: "Failed to get document status",
             error: error.message
+        });
+    }
+};
+
+/**
+ * Retry failed or pending documents for a user
+ * Securely retrieves refresh token from database and triggers OCR retry
+ */
+export const retryDocuments = async (req, res) => {
+    try {
+        const { userId, vendorName, driveFileIds } = req.body;
+
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                message: "userId is required"
+            });
+        }
+
+        // Get user's Google integration with refresh token
+        const integration = await GoogleIntegration.findOne({
+            auth_user_id: userId,
+            provider: "google"
+        });
+
+        if (!integration || integration.status !== "CONNECTED" || !integration.refresh_token) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found or Google account not connected"
+            });
+        }
+
+        // Call OCR service retry endpoint with secure refresh token
+        const payload = {
+            userId,
+            vendorName,
+            driveFileIds,
+            refreshToken: integration.refresh_token,
+            maxOcrRetries: 3,
+            maxChatRetries: 3
+        };
+
+        logger.info("Triggering document retry", {
+            userId,
+            vendorName: vendorName || "all vendors",
+            fileCount: driveFileIds?.length || "all failed"
+        });
+
+        const response = await axios.post(
+            `${OCR_BASE_URL}/api/v1/processing/retry`,
+            payload,
+            {
+                timeout: 90000,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        logger.info("Document retry completed", {
+            userId,
+            status: response.status,
+            retried: response.data.retried
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: response.data.message,
+            ...response.data
+        });
+
+    } catch (error) {
+        logger.error("Error in retryDocuments", {
+            error: error.message,
+            response: error.response?.data
+        });
+        return res.status(500).json({
+            success: false,
+            message: "Failed to retry documents",
+            error: error.response?.data?.message || error.message
         });
     }
 };

@@ -16,11 +16,12 @@ import {
     retryProcessingJob,
     getInvoiceProcessingStatus,
     getInvoiceProcessingStatusSummary,
-    retryInvoiceProcessing,
+    retryDocumentsSecure,
     type ProcessingJob,
     type InvoiceProcessingStatus,
     type InvoiceStatusSummaryResponse
 } from "@/services/api";
+import api from "@/services/api";
 import { useToast } from "@/hooks/use-toast";
 import {
     RefreshCw,
@@ -34,7 +35,8 @@ import {
     ChevronUp,
     LucidePersonStanding,
     LoaderIcon,
-    ExternalLink
+    ExternalLink,
+    Sparkles
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -46,8 +48,8 @@ export default function ProcessingStatus() {
 
     const { toast } = useToast();
 
-    // Get active tab from URL, default to "jobs"
-    const [activeTab, setActiveTab] = useState(() => searchParams.get("tab") || "jobs");
+    // Get active tab from URL, default to "invoices" (changed from "jobs")
+    const [activeTab, setActiveTab] = useState(() => searchParams.get("tab") || "invoices");
 
     const [emailJobs, setEmailJobs] = useState<ProcessingJob[]>([]);
     const [invoiceSummary, setInvoiceSummary] = useState<InvoiceStatusSummaryResponse | null>(null);
@@ -57,6 +59,7 @@ export default function ProcessingStatus() {
     const [loading, setLoading] = useState(true);
     const [retrying, setRetrying] = useState<string | null>(null);
     const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
+    const [syncing, setSyncing] = useState(false);
 
     // Update URL when tab changes
     const handleTabChange = (value: string) => {
@@ -144,44 +147,129 @@ export default function ProcessingStatus() {
         }
     };
 
-    const handleRetryInvoices = async (vendorName?: string) => {
-        // Note: Retry requires Google refresh token from backend
-        // This is a placeholder - in production, token should be fetched from backend
-        toast({
-            variant: "destructive",
-            title: "Retry Not Available",
-            description: "Invoice retry requires backend implementation for secure token handling."
-        });
-        return;
+    const handleRetryInvoice = async (driveFileId: string, status: string) => {
+        if (!userId) return;
 
-        /* Commented until backend provides secure refresh token endpoint
-        setRetrying("invoices");
+        setRetrying(driveFileId);
         try {
-            const { data, response } = await retryInvoiceProcessing({
-                userId: userId!,
-                vendorName,
-                refreshToken: "" // TODO: Get from backend securely
+            // For PENDING documents, trigger initial processing
+            // For FAILED documents, use retry endpoint
+            if (status === "PENDING") {
+                // Trigger processing for pending document
+                const { data, response } = await api.processDocuments(userId);
+
+                if (response.ok && data.success) {
+                    toast({
+                        title: "Processing Started",
+                        description: "Document processing has been initiated. Check status for updates."
+                    });
+                    await loadStatus();
+                } else {
+                    throw new Error(data.message || "Failed to start document processing");
+                }
+            } else {
+                // FAILED documents - use retry endpoint
+                const { data, response } = await retryDocumentsSecure(userId, undefined, [driveFileId]);
+
+                if (response.ok && data.success) {
+                    toast({
+                        title: "Retry Initiated",
+                        description: data.message || "Document retry has been queued for processing."
+                    });
+                    await loadStatus();
+                } else {
+                    throw new Error(data.message || "Failed to retry document");
+                }
+            }
+        } catch (error: any) {
+            toast({
+                variant: "destructive",
+                title: status === "PENDING" ? "Processing Failed" : "Retry Failed",
+                description: error.message || "Could not process the document."
             });
+        } finally {
+            setRetrying(null);
+        }
+    };
+
+    const handleRetryAllFailed = async () => {
+        if (!userId) return;
+
+        setRetrying("all-failed");
+        try {
+            const { data, response } = await retryDocumentsSecure(userId);
 
             if (response.ok && data.success) {
                 toast({
                     title: "Retry Complete",
-                    description: `Retried ${data.retried} invoices. ${data.max_retries_reached} reached max retries.`
+                    description: `Retried ${data.retried} documents. Check status for updates.`
                 });
                 await loadStatus();
             } else {
-                throw new Error(data.message || "Failed to retry invoices");
+                throw new Error(data.message || "Failed to retry documents");
             }
         } catch (error: any) {
             toast({
                 variant: "destructive",
                 title: "Retry Failed",
-                description: error.message || "Could not retry invoices."
+                description: error.message || "Could not retry documents."
             });
         } finally {
             setRetrying(null);
         }
-        */
+    };
+
+    const handleRetryVendor = async (vendorName: string) => {
+        if (!userId) return;
+
+        setRetrying(`vendor-${vendorName}`);
+        try {
+            const { data, response } = await retryDocumentsSecure(userId, vendorName);
+
+            if (response.ok && data.success) {
+                toast({
+                    title: "Retry Complete",
+                    description: `Retried ${data.retried} documents for ${vendorName}.`
+                });
+                await loadStatus();
+            } else {
+                throw new Error(data.message || "Failed to retry vendor documents");
+            }
+        } catch (error: any) {
+            toast({
+                variant: "destructive",
+                title: "Retry Failed",
+                description: error.message || "Could not retry vendor documents."
+            });
+        } finally {
+            setRetrying(null);
+        }
+    };
+
+    const handleSyncToAI = async () => {
+        if (!userId) return;
+
+        setSyncing(true);
+        try {
+            const { data, response } = await api.loadChatKnowledge(userId, true);
+
+            if (response.ok) {
+                toast({
+                    title: "✨ AI Sync Complete",
+                    description: data.message || "Completed invoices have been synced to AI knowledge base. You can now use Chat and Analytics."
+                });
+            } else {
+                throw new Error((data as any).message || "Failed to sync to AI");
+            }
+        } catch (error: any) {
+            toast({
+                variant: "destructive",
+                title: "Sync Failed",
+                description: error.message || "Could not sync to AI knowledge base."
+            });
+        } finally {
+            setSyncing(false);
+        }
     };
 
     const loadInvoiceDetails = async (status: string) => {
@@ -205,14 +293,8 @@ export default function ProcessingStatus() {
             PROCESSING: { variant: "default", icon: Loader2 },
             COMPLETED: { variant: "outline", icon: CheckCircle2 },
             FAILED: { variant: "destructive", icon: XCircle },
+            // Email job statuses (different from invoice statuses)
             RETRY_PENDING: { variant: "secondary", icon: RefreshCw },
-            // Invoice statuses
-            DOWNLOADING: { variant: "default", icon: Loader2 },
-            OCR_PROCESSING: { variant: "default", icon: Loader2 },
-            OCR_SUCCESS: { variant: "outline", icon: CheckCircle2 },
-            OCR_FAILED: { variant: "destructive", icon: XCircle },
-            CHAT_INDEXING: { variant: "default", icon: Loader2 },
-            CHAT_FAILED: { variant: "destructive", icon: XCircle },
         };
 
         const config = variants[status] || { variant: "secondary" as const, icon: AlertCircle };
@@ -220,7 +302,7 @@ export default function ProcessingStatus() {
 
         return (
             <Badge variant={config.variant} className="gap-1 border-0">
-                <Icon className={`h-3 w-3 ${status.includes("PROCESSING") || status.includes("INDEXING") ? "animate-spin" : ""}`} />
+                <Icon className={`h-3 w-3 ${status === "PROCESSING" ? "animate-spin" : ""}`} />
                 {status.replace(/_/g, " ")}
             </Badge>
         );
@@ -255,16 +337,32 @@ export default function ProcessingStatus() {
                     <h1 className="text-3xl font-bold">Processing Status</h1>
                     <p className="text-muted-foreground">Monitor and retry failed processing jobs</p>
                 </div>
-                <Button onClick={loadStatus} variant="outline">
-                    <RefreshCw className="h-4 w-4 mr-2" />
-                    Refresh
-                </Button>
+                <div className="flex gap-2">
+                    {invoiceSummary && invoiceSummary.by_status["COMPLETED"] > 0 && (
+                        <Button 
+                            onClick={handleSyncToAI} 
+                            disabled={syncing}
+                            variant="default"
+                        >
+                            {syncing ? (
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                                <Sparkles className="h-4 w-4 mr-2" />
+                            )}
+                            Sync to AI
+                        </Button>
+                    )}
+                    <Button onClick={loadStatus} variant="outline">
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Refresh
+                    </Button>
+                </div>
             </div>
 
             <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
                 <TabsList>
-                    <TabsTrigger value="jobs">Email Fetch Jobs</TabsTrigger>
                     <TabsTrigger value="invoices">Invoice Processing</TabsTrigger>
+                    <TabsTrigger value="jobs">Email Fetch Jobs</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="jobs" className="space-y-4">
@@ -406,10 +504,41 @@ export default function ProcessingStatus() {
                                         {invoiceSummary.by_status["PENDING"]} invoices
                                     </div>
                                     <div className="text-sm text-muted-foreground">
-                                        These documents are queued and will be processed automatically
+                                        These documents are pending. Click "Retry" button below to start processing.
                                     </div>
                                 </div>
                             </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Failed Documents Alert with Retry */}
+                    {invoiceSummary && invoiceSummary.retryable > 0 && (
+                        <Card className="border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20">
+                            <CardHeader className="pb-3">
+                                <CardTitle className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+                                        Failed Documents
+                                    </div>
+                                    <Button
+                                        size="sm"
+                                        onClick={handleRetryAllFailed}
+                                        disabled={retrying === "all-failed"}
+                                        variant="outline"
+                                        className="border-red-300 text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
+                                    >
+                                        {retrying === "all-failed" ? (
+                                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                        ) : (
+                                            <RefreshCw className="h-4 w-4 mr-2" />
+                                        )}
+                                        Retry All Failed
+                                    </Button>
+                                </CardTitle>
+                                <CardDescription>
+                                    {invoiceSummary.retryable} document{invoiceSummary.retryable !== 1 ? 's' : ''} failed and can be retried
+                                </CardDescription>
+                            </CardHeader>
                         </Card>
                     )}
 
@@ -468,7 +597,7 @@ export default function ProcessingStatus() {
                         )}
                     </div>
 
-                    {/* Invoice Documents List - Simple View like Status Tab */}
+                    {/* Invoice Documents List with Retry Buttons */}
                     <Card>
                         <CardHeader>
                             <CardTitle>Invoice Documents</CardTitle>
@@ -501,44 +630,51 @@ export default function ProcessingStatus() {
                                                         {getStatusBadge(invoice.status)}
                                                     </div>
 
-                                                    {invoice.errors.length > 0 && (
-                                                        <Alert variant="destructive" className="mt-2">
-                                                            <XCircle className="h-4 w-4" />
-                                                            <AlertDescription>
-                                                                <div className="font-medium">
-                                                                    {invoice.errors[0].phase.toUpperCase()}: {invoice.errors[0].message}
-                                                                </div>
-                                                                <div className="text-xs mt-1">
-                                                                    {formatDistanceToNow(new Date(invoice.errors[0].timestamp), { addSuffix: true })}
-                                                                    {invoice.errors[0].retryable && <span className="ml-2 text-yellow-600">(Retryable)</span>}
-                                                                    {" • "}OCR Attempts: {invoice.ocr_attempt_count}
-                                                                    {" • "}AI Attempts: {invoice.chat_attempt_count}
-                                                                </div>
-                                                            </AlertDescription>
-                                                        </Alert>
+                                                    {invoice.status === "PENDING" && (
+                                                        <p className="text-xs text-muted-foreground mt-1">
+                                                            Ready to process - use Retry button to start
+                                                        </p>
+                                                    )}
+
+                                                    {invoice.status === "PROCESSING" && (
+                                                        <p className="text-xs text-muted-foreground mt-1">
+                                                            Currently being processed...
+                                                        </p>
+                                                    )}
+
+                                                    {invoice.status === "FAILED" && invoice.errors.length > 0 && (
+                                                        <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                                                            Processing failed • OCR Attempts: {invoice.ocr_attempt_count} • AI Attempts: {invoice.chat_attempt_count}
+                                                        </p>
                                                     )}
 
                                                     {invoice.status === "COMPLETED" && (
-                                                        <p className="text-xs text-muted-foreground">
-                                                            Processed successfully
-                                                            {invoice.ocr_completed_at && ` • ${formatDistanceToNow(new Date(invoice.ocr_completed_at), { addSuffix: true })}`}
-                                                        </p>
-                                                    )}
-
-                                                    {invoice.status === "PENDING" && (
-                                                        <p className="text-xs text-muted-foreground">
-                                                            Waiting to be processed
-                                                        </p>
-                                                    )}
-
-                                                    {(invoice.status === "DOWNLOADING" || invoice.status === "OCR_PROCESSING" || invoice.status === "CHAT_INDEXING") && (
-                                                        <p className="text-xs text-muted-foreground">
-                                                            Currently being processed...
+                                                        <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                                                            Successfully processed
                                                         </p>
                                                     )}
                                                 </div>
 
                                                 <div className="flex gap-2">
+                                                    {/* Retry button for FAILED and PENDING status */}
+                                                    {(invoice.status === "FAILED" || invoice.status === "PENDING") && (
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => handleRetryInvoice(invoice.drive_file_id, invoice.status)}
+                                                            disabled={retrying === invoice.drive_file_id}
+                                                            className="border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-900/30"
+                                                        >
+                                                            {retrying === invoice.drive_file_id ? (
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                            ) : (
+                                                                <>
+                                                                    <RefreshCw className="h-4 w-4 mr-1" />
+                                                                    {invoice.status === "PENDING" ? "Start Processing" : "Retry Manually"}
+                                                                </>
+                                                            )}
+                                                        </Button>
+                                                    )}
                                                     {invoice.web_view_link && (
                                                         <Button
                                                             size="sm"

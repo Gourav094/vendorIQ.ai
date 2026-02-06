@@ -11,7 +11,7 @@ from app.services.retry_service import (
     get_processing_status,
     retry_failed_invoices,
     get_status_summary,
-    clear_user_statuses
+    clear_user_documents
 )
 
 router = APIRouter(prefix="/api/v1/processing", tags=["Processing & Retry"])
@@ -114,8 +114,7 @@ async def retry_endpoint(
         refresh_token=request.refreshToken,
         vendor_name=request.vendorName,
         drive_file_ids=request.driveFileIds,
-        max_ocr_retries=request.maxOcrRetries,
-        max_chat_retries=request.maxChatRetries
+        max_retries=request.maxOcrRetries
     )
     
     if not result.get("success"):
@@ -129,7 +128,7 @@ async def clear_status_endpoint(
     userId: str = Query(..., description="User identifier"),
 ):
     """Clear all processing status records for a user."""
-    result = clear_user_statuses(user_id=userId)
+    result = clear_user_documents(user_id=userId)
     
     if not result.get("success"):
         raise HTTPException(status_code=500, detail=result.get("error", "Failed to clear status"))

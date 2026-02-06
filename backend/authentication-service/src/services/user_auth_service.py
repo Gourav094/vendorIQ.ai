@@ -2,6 +2,7 @@ import os
 import re
 import datetime
 import logging 
+import certifi
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import DuplicateKeyError
 from bson import ObjectId
@@ -19,12 +20,15 @@ logger = logging.getLogger(__name__)
 
 class UserAuthService:
     def __init__(self, db_path=None):  # db_path kept for backward compat (unused now)
-        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-        db_name = os.getenv("MONGO_DB_NAME", "authentication_service")
+        mongo_uri = os.getenv("MONGO_URI")
+        if not mongo_uri:
+            raise RuntimeError("MONGO_URI environment variable is required")
+        db_name = os.getenv("MONGO_DB_NAME", "app_database")
         self.client = MongoClient(  
             mongo_uri,  
             serverSelectionTimeoutMS=10000,  
-            connectTimeoutMS=10000  
+            connectTimeoutMS=10000,
+            tlsCAFile=certifi.where()
         )  
         self.db = self.client[db_name]
         self.collection = self.db["users"]

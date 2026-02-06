@@ -9,3 +9,4 @@ google-auth
 google-auth-oauthlib
 python-multipart
 PyJWT
+pymongo

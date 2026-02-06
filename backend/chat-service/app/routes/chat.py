@@ -1,202 +1,311 @@
-from fastapi import APIRouter, HTTPException, Query, Depends, Request
+"""
+Chat Service - Simplified REST API
+
+Endpoints:
+  POST /sync       - Index unindexed documents for a user
+  GET  /query      - Ask questions (RAG)
+  GET  /analytics  - Get spend analytics
+  DELETE /reset    - Clear all indexed data
+  GET  /health     - Health check
+"""
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 from typing import Optional
 from app.core.orchestrator import VendorKnowledgeOrchestrator
+from app.db import get_unindexed_documents, mark_documents_indexed, reset_user_index, get_user_document_stats
+import os
+import json
+import httpx
 
-# Unified router (no extra prefix to keep paths explicit)
-router = APIRouter(tags=["VendorIQ RAG Service"])
+router = APIRouter(tags=["Chat Service"])
 
-# Use a singleton orchestrator to avoid re-loading Gemini model every request
-_GLOBAL_ORCHESTRATOR: VendorKnowledgeOrchestrator | None = None
+# Singleton orchestrator
+_ORCHESTRATOR: VendorKnowledgeOrchestrator | None = None
 
 def get_orchestrator():
-    global _GLOBAL_ORCHESTRATOR
-    if _GLOBAL_ORCHESTRATOR is None:
-        _GLOBAL_ORCHESTRATOR = VendorKnowledgeOrchestrator()
-    return _GLOBAL_ORCHESTRATOR
+    global _ORCHESTRATOR
+    if _ORCHESTRATOR is None:
+        _ORCHESTRATOR = VendorKnowledgeOrchestrator()
+    return _ORCHESTRATOR
 
-# Load / build knowledge base (cron/internal use)
-@router.post("/knowledge/load", summary="Load & Index Vendor Knowledge", description="Load vendor data (local sample or remote Drive master.json for a user), generate embeddings, store in vector DB")
-async def load_vendor_knowledge(
-    incremental: bool = Query(False, description="Only index new chunks if true"),
-    userId: str | None = Query(None, description="User whose Drive vendor master.json files will be loaded if refreshToken provided"),
-    refreshToken: str | None = Query(None, description="Google OAuth refresh token for Drive access to vendor master.json files"),
-    orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator),
-):
-    try:
-        result = orchestrator.process_vendor_data(incremental=incremental, user_id=userId, refresh_token=refreshToken)
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["message"])
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Knowledge load failed: {str(e)}")
 
-# Direct ingest endpoint (OCR service pushes master data; avoids refreshToken usage here)
-from pydantic import BaseModel, Field
-class DirectVendorPayload(BaseModel):
-    vendorName: str = Field(..., description="Vendor name")
-    records: list = Field(default_factory=list, description="Array of invoice objects (master.json content)")
+# ============================================================================
+# SYNC - Index unindexed documents
+# ============================================================================
 
-class DirectKnowledgeIngest(BaseModel):
-    userId: str | None = Field(None, description="Optional user identifier (for logging)")
-    incremental: bool = Field(True, description="Skip existing chunks if true")
-    vendors: list[DirectVendorPayload] = Field(default_factory=list, description="List of vendor master arrays")
+class SyncRequest(BaseModel):
+    user_id: str
+    refresh_token: Optional[str] = None  # Needed to fetch master.json from Drive
 
-@router.post("/knowledge/ingest", summary="Direct Master JSON Ingest", description="Index raw vendor master arrays pushed from OCR service (bypasses Drive fetch).")
-async def direct_ingest(payload: DirectKnowledgeIngest, orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator)):
-    try:
-        dataset = orchestrator.data_loader.from_raw_vendor_arrays([
-            {"vendorName": v.vendorName, "records": v.records} for v in payload.vendors
-        ])
-        result = orchestrator.process_direct_dataset(dataset, incremental=payload.incremental)
-        if not result.get("success"):
-            raise HTTPException(status_code=400, detail=result.get("message", "Ingest failed"))
-        result["userId"] = payload.userId
-        result["vendorCount"] = len(payload.vendors)
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Direct ingest failed: {e}")
+class SyncResponse(BaseModel):
+    success: bool
+    documents_indexed: int
+    message: str
 
-# Chat RAG endpoint 
-@router.get(
-    "/query",
-    summary="Query Vendor Knowledge",
-    description="Answer a question about a specific vendor using vector retrieval + LLM generation. Gated by user Google connection if userId provided.",
-)
-async def chat_query(
-    question: str = Query(..., description="User question"),
-    vendor_name: str | None = Query(None, description="Explicit vendor to query; if omitted auto-detection/aggregation used"),
-    userId: str | None = Query(None, description="User ID to authorize query (must have active Google connection)"),
-    orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator),
-):
-    try:
-        # Optional gating: if userId supplied, verify Google connection via email-storage-service
-        if userId:
-            import re, os, httpx
-            if not re.match(r"^[a-f0-9]{24}$", userId, re.IGNORECASE):
-                raise HTTPException(status_code=400, detail="Invalid userId format")
-            base_url = os.getenv("EMAIL_STORAGE_SERVICE_URL", "http://localhost:4002/api/v1")
-            sync_url = f"{base_url}/users/{userId}/sync-status"
-            try:
-                async with httpx.AsyncClient(timeout=5.0) as client:
-                    resp = await client.get(sync_url)
-                if resp.status_code == 200:
-                    payload = resp.json()
-                    if not payload.get("hasGoogleConnection"):
-                        raise HTTPException(status_code=403, detail="Assistant disabled: Google account disconnected.")
-                else:
-                    if resp.status_code == 404:
-                        raise HTTPException(status_code=404, detail="User not found for gating")
-            except HTTPException:
-                raise
-            except Exception as e:
-                print(f"User connection gating check failed: {e}")
 
-        result = orchestrator.answer_query(question=question, vendor_name=vendor_name)
-        if not result["success"]:
-            raise HTTPException(status_code=400, detail=result["message"])
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
-
-@router.delete(
-    "/delete-context",
-    summary="Clear Vector Database",
-    description="Delete all stored embeddings and reset the vendor knowledge database.",
-)
-async def delete_context(orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator)):
-    try:
-        result = orchestrator.reset_database()
-        if not result.get("success"):
-            raise HTTPException(status_code=400, detail=result.get("message", "Failed to clear database."))
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete context: {str(e)}")
-
-# Health
-@router.get("/health", summary="Health Check", description="Service + vector DB status")
-async def health_check(orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator)):
-    try:
-        stats = orchestrator.get_system_stats()
-        return {
-            "status": "ok" if stats.get("success") else "error",
-            "service": "chat-rag-service",
-            "vector": stats.get("stats", {}),
-        }
-    except Exception as e:
-        return {"status": "error", "service": "chat-rag-service", "error": str(e)}
-
-@router.get("/vendor/summary", summary="Vendor Summary", description="Aggregated stats and invoice excerpts for a single vendor from indexed knowledge chunks")
-async def vendor_summary(
-    vendor_name: str = Query(..., description="Vendor name to summarize"),
-    orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator),
-):
-    try:
-        result = orchestrator.get_vendor_summary(vendor_name)
-        if not result.get("success"):
-            raise HTTPException(status_code=404, detail=result.get("message", "Vendor summary not found"))
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Vendor summary failed: {e}")
-
-# OPTIONS endpoint to list all registered endpoints in the service
-@router.options(
-    "/endpoints",
-    summary="List Chat-Service Endpoints",
-    description="Returns REST (/api/v1) and GraphQL (/graphql) endpoints.",
-    tags=["VendorIQ RAG Service"],
-)
-async def list_endpoints(request: Request):
-    app = request.app
-    collected = {}
-    for route in app.routes:
-        if not hasattr(route, "methods"):
+@router.post("/sync", response_model=SyncResponse, summary="Sync & Index Documents")
+async def sync_documents(request: SyncRequest):
+    """
+    Index documents that have completed OCR but not yet indexed.
+    
+    Flow:
+    1. Query MongoDB for documents where ocr_status=COMPLETED and indexed=false
+    2. For each document, call email-storage-service to get master.json
+    3. Email-storage-service fetches from Google Drive
+    4. Create embeddings and store in vector DB
+    5. Mark documents as indexed in MongoDB
+    """
+    user_id = request.user_id
+    
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    # Get unindexed documents from MongoDB
+    unindexed = get_unindexed_documents(user_id)
+    
+    if not unindexed:
+        return SyncResponse(
+            success=True,
+            documents_indexed=0,
+            message="No documents pending indexing"
+        )
+    
+    orchestrator = get_orchestrator()
+    indexed_file_ids = []
+    
+    # Group documents by vendor for batch processing
+    vendors_data = {}
+    for doc in unindexed:
+        vendor_name = doc.get("vendorName", "Unknown")
+        vendor_folder_id = doc.get("vendorFolderId")  # ← Use vendorFolderId, not invoiceFolderId
+        
+        if not vendor_folder_id:
+            print(f"Skipping document {doc.get('driveFileId')}: no vendorFolderId")
             continue
-        path = route.path
-        # Exclude FastAPI internal + root
-        if path in {"/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc", "/"}:
-            continue
-        # Only include chat REST and GraphQL root
-        if not (path.startswith("/api/v1/") or path == "/graphql"):
-            continue
-        if path == request.url.path:  # do not list this listing endpoint itself
-            continue
-        methods = {m for m in route.methods if m != "HEAD"}
-        if not methods:
-            continue
-        if path not in collected:
-            collected[path] = {
-                "path": path,
-                "methods": set(),
-                "name": route.name,
-                "summary": getattr(route, "summary", None),
-                "description": getattr(route, "description", None)
+            
+        if vendor_name not in vendors_data:
+            vendors_data[vendor_name] = {
+                "vendor_folder_id": vendor_folder_id,  # ← Changed key name
+                "docs": []
             }
-        collected[path]["methods"].update(methods)
-    endpoints = []
-    for ep in collected.values():
-        ep["methods"] = sorted(ep["methods"])  # convert set to sorted list
-        endpoints.append(ep)
-    endpoints.sort(key=lambda x: x["path"])  # stable order
-    return {"count": len(endpoints), "endpoints": endpoints}
+        vendors_data[vendor_name]["docs"].append(doc)
+    
+    print(f"Found {len(vendors_data)} vendors with {len(unindexed)} unindexed documents")
+    
+    # Process each vendor's documents
+    for vendor_name, vendor_info in vendors_data.items():
+        try:
+            # Fetch master.json via email-storage-service
+            master_records = await _fetch_master_via_email_service(
+                user_id,
+                vendor_info["vendor_folder_id"]  # ← Use vendorFolderId
+            )
+            
+            if not master_records:
+                print(f"No master.json found for vendor {vendor_name}")
+                continue
+            
+            # Build dataset for this vendor
+            dataset = orchestrator.data_loader.from_raw_vendor_arrays([
+                {"vendorName": vendor_name, "records": master_records}
+            ])
+            
+            # Index into vector DB
+            result = orchestrator.process_direct_dataset(dataset, incremental=True)
+            
+            if result.get("success"):
+                # Mark these documents as indexed
+                file_ids = [doc.get("driveFileId") for doc in vendor_info["docs"]]
+                indexed_file_ids.extend(file_ids)
+                print(f"✓ Indexed {len(file_ids)} documents for vendor {vendor_name}")
+                
+        except Exception as e:
+            print(f"Error indexing vendor {vendor_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    # Update MongoDB
+    if indexed_file_ids:
+        mark_documents_indexed(user_id, indexed_file_ids)
+    
+    return SyncResponse(
+        success=True,
+        documents_indexed=len(indexed_file_ids),
+        message=f"Indexed {len(indexed_file_ids)} documents from {len(vendors_data)} vendors"
+    )
 
-@router.get("/analytics", summary="Analytics Overview", description="Real-time spend & trend analytics across all vendors with live Gemini summary")
-async def analytics_overview(
-    period: str = Query("year", description="Range: month | quarter | year | all"),
-    userId: Optional[str] = Query(None, description="Reserved for future per-user scoping (currently unused)"),
-    orchestrator: VendorKnowledgeOrchestrator = Depends(get_orchestrator),
+
+async def _fetch_master_via_email_service(user_id: str, invoice_folder_id: str) -> list:
+    """Fetch master.json via email-storage-service (which fetches from Google Drive)."""
+    try:
+        from app.config import EMAIL_STORAGE_SERVICE_URL
+        
+        # Call email-storage-service to get master.json
+        # Email-storage-service handles Drive authentication and fetching
+        url = f"{EMAIL_STORAGE_SERVICE_URL}/drive/users/{user_id}/vendors/{invoice_folder_id}/master"
+        
+        print(f"📞 Calling email-storage-service: {url}")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url)
+            
+            print(f"📥 Response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                print(f"❌ Failed to fetch master.json via email-storage-service: {response.status_code}")
+                return []
+            
+            data = response.json()
+            
+            # Debug: Print the entire response structure
+            print(f"📦 Response data keys: {list(data.keys())}")
+            print(f"📦 Full response: {json.dumps(data, indent=2)}")
+            
+            # The API returns { userId, vendorFolderId, invoiceFolderId, records: [...] }
+            if data.get("records") is not None:
+                records = data["records"]
+                print(f"✓ Fetched {len(records)} records from master.json")
+                return records if isinstance(records, list) else []
+            else:
+                print(f"⚠️  No 'records' field in response")
+                return []
+            
+    except Exception as e:
+        print(f"💥 Error fetching master.json via email-storage-service: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+# ============================================================================
+# QUERY - Ask questions using RAG
+# ============================================================================
+
+@router.get("/query", summary="Ask a Question")
+async def query(
+    q: str = Query(..., description="Your question"),
+    vendor: Optional[str] = Query(None, description="Filter by vendor name"),
+    user_id: Optional[str] = Query(None, description="User ID for access control"),
 ):
-    """Always compute fresh analytics and generate a Gemini summary; no caching layer."""
+    """
+    Ask a question about your invoice data.
+    
+    Examples:
+    - "What is my total spend?"
+    - "Show invoices from Acme Corp"
+    - "Which vendor has the highest spend?"
+    """
+    orchestrator = get_orchestrator()
+    
+    # Optional: verify user has Google connection
+    if user_id:
+        connected = await _check_user_connection(user_id)
+        if not connected:
+            raise HTTPException(status_code=403, detail="Google account not connected")
+    
+    result = orchestrator.answer_query(question=q, vendor_name=vendor)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "Query failed"))
+    
+    return {
+        "answer": result.get("answer"),
+        "sources": result.get("sources", []),
+        "vendor": result.get("vendor_name"),
+    }
+
+
+async def _check_user_connection(user_id: str) -> bool:
+    """Check if user has active Google connection."""
+    try:
+        base_url = os.getenv("EMAIL_STORAGE_SERVICE_URL", "http://localhost:4002/api/v1")
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base_url}/users/{user_id}/sync-status")
+            if resp.status_code == 200:
+                return resp.json().get("hasGoogleConnection", False)
+    except Exception:
+        pass
+    return True  # Default to allowing if check fails
+
+
+# ============================================================================
+# ANALYTICS - Get spend analytics
+# ============================================================================
+
+@router.get("/analytics", summary="Get Analytics")
+async def analytics(
+    period: str = Query("year", description="Time period: month, quarter, year, all"),
+    user_id: Optional[str] = Query(None, description="User ID (for future per-user scoping)"),
+):
+    """
+    Get spend analytics and trends.
+    
+    Returns:
+    - Total spend and invoice count
+    - Top vendors by spend
+    - Monthly/quarterly trends
+    - AI-generated summary
+    """
+    orchestrator = get_orchestrator()
     result = orchestrator.get_analytics(period=period)
+    
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "Analytics unavailable"))
-    result["cached"] = False
-    result["period"] = period
-    # Indicate live generation
-    result["source"] = "live"
+    
     return result
+
+
+# ============================================================================
+# RESET - Clear all indexed data
+# ============================================================================
+
+@router.delete("/reset", summary="Reset Index")
+async def reset(
+    user_id: Optional[str] = Query(None, description="Reset for specific user (clears MongoDB indexed flags)"),
+):
+    """
+    Clear the vector database and optionally reset MongoDB indexed flags.
+    
+    Use this when you want to re-index all documents from scratch.
+    """
+    orchestrator = get_orchestrator()
+    result = orchestrator.reset_database()
+    
+    # Also reset MongoDB indexed flags if user_id provided
+    docs_reset = 0
+    if user_id:
+        docs_reset = reset_user_index(user_id)
+    
+    return {
+        "success": result.get("success"),
+        "message": result.get("message"),
+        "mongodb_docs_reset": docs_reset,
+    }
+
+
+# ============================================================================
+# HEALTH - Health check
+# ============================================================================
+
+@router.get("/health", summary="Health Check")
+async def health():
+    """Check service health and vector DB status."""
+    orchestrator = get_orchestrator()
+    stats = orchestrator.get_system_stats()
+    
+    return {
+        "status": "ok" if stats.get("success") else "error",
+        "service": "chat-service",
+        "vector_db": stats.get("stats", {}),
+    }
+
+
+# ============================================================================
+# STATS - Get document indexing stats
+# ============================================================================
+
+@router.get("/stats", summary="Get Indexing Stats")
+async def stats(user_id: str = Query(..., description="User ID")):
+    """Get document indexing statistics for a user."""
+    return get_user_document_stats(user_id)
