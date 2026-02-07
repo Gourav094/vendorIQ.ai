@@ -40,7 +40,6 @@ const Vendors = () => {
     if (data && !isLoading && !isFetching) {
       if (total > 0) {
         toast({
-          title: "✓ Vendors Loaded Successfully",
           description: `Found ${total} vendor ${total === 1 ? 'folder' : 'folders'} in your Google Drive`,
         });
       }

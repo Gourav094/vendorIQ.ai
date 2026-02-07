@@ -40,10 +40,7 @@ const Invoices = () => {
   
   const userId = user?.id || "";
   
-  // Cache duration: 5 minutes
-  const CACHE_DURATION = 5 * 60 * 1000;
-  
-  // Hybrid approach: Try URL params first, then fallback to localStorage
+  // Get vendor from URL params or localStorage
   const urlVendorId = searchParams.get("vendorId");
   const urlVendorName = searchParams.get("vendorName");
   
@@ -82,7 +79,6 @@ const Invoices = () => {
   useEffect(() => {
     if (!user) {
       toast({
-        title: "Authentication Required",
         description: "Please log in to view invoices",
         variant: "destructive",
       });
@@ -173,21 +169,12 @@ const Invoices = () => {
     if (!forceRefresh && cachedData) {
       try {
         const parsed = JSON.parse(cachedData);
-        const cacheAge = Date.now() - parsed.timestamp;
 
-        // If cache is still fresh (< 5 minutes)
-        if (cacheAge < CACHE_DURATION) {
-          setInvoices(parsed.invoices || []);
-          setMasterSummary(parsed.masterSummary || null);
-          setMasterError(parsed.masterError || null);
-          setLoadedFromCache(true);
-          
-          toast({
-            title: "📦 Loaded from cache",
-            description: `Showing cached data (${Math.round(cacheAge / 1000)}s old). Click Refresh for latest data.`,
-          });
-          return; 
-        }
+        setInvoices(parsed.invoices || []);
+        setMasterSummary(parsed.masterSummary || null);
+        setMasterError(parsed.masterError || null);
+        setLoadedFromCache(true);
+        return; 
       } catch (error) {
         console.error("Cache parse error:", error);
         // Continue to fetch if cache is invalid
@@ -201,7 +188,6 @@ const Invoices = () => {
   const fetchInvoices = async () => {
     if (!userId || !/^[a-f0-9]{24}$/i.test(userId)) {
       toast({
-        title: "⚠️ Invalid User ID Format",
         description: "User ID must be exactly 24 characters (hexadecimal). Example: 690c7d0ee107fb31784c1b1b",
         variant: "destructive",
       });
@@ -210,7 +196,6 @@ const Invoices = () => {
 
     if (!vendorId) {
       toast({
-        title: "⚠️ Vendor Required",
         description: "Please select a vendor from the Vendors page or enter a Google Drive folder ID below.",
         variant: "destructive",
       });
@@ -226,13 +211,9 @@ const Invoices = () => {
       const { data, response } = await api.getInvoices(userId, vendorId);
 
       if (response.ok) {
-        setInvoices(data.invoices || []);
-        if (data.total > 0) {
-          toast({
-            title: "✓ Invoices Loaded Successfully",
-            description: `Found ${data.total} invoice ${data.total === 1 ? 'file' : 'files'} for ${vendorName || 'this vendor'}`,
-          });
-        } else {
+        const invoiceData = data as { invoices: Invoice[]; total: number };
+        setInvoices(invoiceData.invoices || []);
+        if (invoiceData.total < 0) {
           toast({
             title: "No Invoices Found",
             description: `No invoice files found for ${vendorName || 'this vendor'}. Try syncing emails to fetch new invoices.`,
@@ -240,37 +221,32 @@ const Invoices = () => {
           });
         }
 
-        await fetchMasterSummary(userId, vendorId);
+        // Fetch master summary and get the result directly for caching
+        const masterResult = await fetchMasterSummary(userId, vendorId);
 
-        // ONLY cache successful data - check if masterError is null after fetchMasterSummary
+        // Cache the data with the actual master result
         const cacheKey = getCacheKey(vendorId);
-        // Wait a bit for state to update, then check masterError
-        setTimeout(() => {
-          if (!masterError) {
-            localStorage.setItem(
-              cacheKey,
-              JSON.stringify({
-                timestamp: Date.now(),
-                invoices: data.invoices || [],
-                masterSummary: masterSummary,
-              })
-            );
-          } else {
-            // Error in master data - clear cache so next visit retries
-            localStorage.removeItem(cacheKey);
-          }
-        }, 100);
+        if (masterResult.summary || invoiceData.invoices?.length > 0) {
+          localStorage.setItem(
+            cacheKey,
+            JSON.stringify({
+              timestamp: Date.now(),
+              invoices: invoiceData.invoices || [],
+              masterSummary: masterResult.summary,
+              masterError: masterResult.error,
+            })
+          );
+        }
       } else {
         // API error - clear cache
         const cacheKey = getCacheKey(vendorId);
         localStorage.removeItem(cacheKey);
         toast({
-          title: "⚠️ Unable to Load Invoices",
           description:
             (data as any).message ||
             (data as any).details ||
             "Failed to fetch invoices from Google Drive. Verify your vendor ID and Google connection.",
-          variant: "destructive",
+          variant: "default",
         });
       }
     } catch (error) {
@@ -286,7 +262,7 @@ const Invoices = () => {
     }
   };
   
-  const fetchMasterSummary = async (selectedUserId: string, selectedVendorId: string) => {
+  const fetchMasterSummary = async (selectedUserId: string, selectedVendorId: string): Promise<{ summary: MasterSummary | null; error: string | null }> => {
     setIsMasterLoading(true);
     try {
       const { data, response } = await api.getVendorMaster(selectedUserId, selectedVendorId);
@@ -294,45 +270,29 @@ const Invoices = () => {
         const error = (data as any).message || data.reason || "Master data not available for this vendor yet.";
         setMasterError(error);
         setMasterSummary(null);
-        
-        // Update cache with error state
-        const cacheKey = getCacheKey(selectedVendorId);
-        const existingCache = localStorage.getItem(cacheKey);
-        if (existingCache) {
-          const parsed = JSON.parse(existingCache);
-          parsed.masterError = error;
-          parsed.masterSummary = null;
-          localStorage.setItem(cacheKey, JSON.stringify(parsed));
-        }
-        return;
+        return { summary: null, error };
       }
 
       setMasterSummary(data);
       setMasterError(null);
       
-      // Update cache with successful master data
-      const cacheKey = getCacheKey(selectedVendorId);
-      const existingCache = localStorage.getItem(cacheKey);
-      if (existingCache) {
-        const parsed = JSON.parse(existingCache);
-        parsed.masterSummary = data;
-        parsed.masterError = null;
-        localStorage.setItem(cacheKey, JSON.stringify(parsed));
-      }
-      
       if (data.records?.length) {
         toast({
-          title: "📊 Analytics Ready",
           description: `Loaded ${data.records.length} processed invoice ${
             data.records.length === 1 ? "entry" : "entries"
           } from master.json`,
         });
+        return { summary: data, error: null };
       } else {
-        setMasterError("Master file found but contains no processed invoices yet.");
+        const error = "Master file found but contains no processed invoices yet.";
+        setMasterError(error);
+        return { summary: null, error };
       }
     } catch (error) {
-      setMasterError("Unable to load master analytics. Please ensure the OCR service uploaded master.json for this vendor.");
+      const errorMsg = "Unable to load master analytics. Please ensure the OCR service uploaded master.json for this vendor.";
+      setMasterError(errorMsg);
       setMasterSummary(null);
+      return { summary: null, error: errorMsg };
     } finally {
       setIsMasterLoading(false);
     }
@@ -341,7 +301,6 @@ const Invoices = () => {
   const openInvoice = (webViewLink: string, fileName: string) => {
     window.open(webViewLink, '_blank', 'noopener,noreferrer');
     toast({
-      title: "📄 Opening Invoice",
       description: `Opening ${fileName} in a new tab`,
     });
   };
@@ -355,7 +314,6 @@ const Invoices = () => {
     link.click();
     document.body.removeChild(link);
     toast({
-      title: "⬇️ Download Started",
       description: `Downloading ${fileName} to your device`,
     });
   };
@@ -548,45 +506,52 @@ const Invoices = () => {
           <div className="space-y-1.5">
             <CardTitle>Vendor Analytics</CardTitle>
             <CardDescription className="text-xs sm:text-sm">
-              Insights derived from OCR processed master.json for this vendor. Base currency {BASE_CURRENCY}.
+              Insights derived from OCR processed invoices for this vendor.
             </CardDescription>
           </div>
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-            <Label htmlFor="currency-select" className="text-xs uppercase text-muted-foreground whitespace-nowrap">
-              Currency
-            </Label>
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <Select
-                value={currencyPreference}
-                onValueChange={(value) => setCurrencyPreference(value as SupportedCurrency)}
-                disabled={ratesLoading}
-              >
-                <SelectTrigger id="currency-select" className="w-full sm:w-[160px]">
-                  <SelectValue placeholder="Currency" />
-                </SelectTrigger>
-                <SelectContent>
-                  {currencyOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {ratesLoading && (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
-              )}
+          {!masterError && (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+              <Label htmlFor="currency-select" className="text-xs uppercase text-muted-foreground whitespace-nowrap">
+                Currency
+              </Label>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <Select
+                  value={currencyPreference}
+                  onValueChange={(value) => setCurrencyPreference(value as SupportedCurrency)}
+                  disabled={ratesLoading}
+                >
+                  <SelectTrigger id="currency-select" className="w-full sm:w-[160px]">
+                    <SelectValue placeholder="Currency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {currencyOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {ratesLoading && (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent>
           {isMasterLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
           ) : masterError ? (
-            <div className="flex items-center gap-3 rounded-md border border-dashed border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              <span className="break-words">{masterError}</span>
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center mb-4">
+                <FileText className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h3 className="font-medium text-foreground mb-1">No Analytics Available</h3>
+              <p className="text-sm text-muted-foreground max-w-sm">
+                Invoice data hasn't been processed yet. Process documents via OCR to see analytics.
+              </p>
             </div>
           ) : masterSummary && (
             <>
@@ -645,7 +610,7 @@ const Invoices = () => {
                 </div>
               </div>
 
-              <div className="overflow-x-auto -mx-4 sm:-mx-6 px-4 sm:px-6">
+              <div className="overflow-x-auto -mx-4 sm:-mx-6 px-4 mt-6 sm:px-6">
                 <div className="inline-block min-w-full align-middle">
                   <table className="w-full text-xs sm:text-sm">
                     <thead>
@@ -783,7 +748,7 @@ const Invoices = () => {
       {/* Invoices List */}
       {isLoading ? (
         <Card>
-          <CardContent className="flex items-center justify-center h-48">
+          <CardContent className="flex items-center justify-center py-12">
             <div className="flex flex-col items-center gap-2">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">Loading invoices...</p>
@@ -792,48 +757,47 @@ const Invoices = () => {
         </Card>
       ) : filteredInvoices.length === 0 ? (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center h-48 text-center">
+          <CardContent className="py-10 px-6">
             {invoices.length === 0 ? (
-              <>
-                <AlertCircle className="h-12 w-12 text-muted-foreground m-4" />
+              <div className="flex flex-col items-center text-center">
+                <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center mb-4">
+                  <FileText className="h-7 w-7 text-muted-foreground" />
+                </div>
                 <h3 className="text-lg font-semibold mb-2">No Invoices Available</h3>
-                <p className="text-sm text-muted-foreground max-w-md mb-3">
+                <p className="text-sm text-muted-foreground mb-4 max-w-md">
                   {vendorId 
-                    ? `No invoice files found for ${vendorName || 'this vendor'}. This could mean:`
-                    : "To view invoices, you need to select a vendor first."}
+                    ? `No invoice files found for ${vendorName || 'this vendor'}.`
+                    : "Select a vendor to view invoices."}
                 </p>
                 {vendorId && (
-                  <ul className="text-xs text-muted-foreground max-w-md text-left mb-3 space-y-1">
-                    <li>• No emails have been synced from this vendor yet</li>
-                    <li>• The vendor's emails don't contain PDF attachments</li>
-                    <li>• The invoice folder is empty in Google Drive</li>
-                  </ul>
+                  <p className="text-xs text-muted-foreground mb-4">
+                    Try syncing emails or check if files exist in Google Drive.
+                  </p>
                 )}
-                <p className="text-xs text-muted-foreground max-w-md mb-4">
-                  💡 Tip: {vendorId ? "Go to Email Sync and fetch emails from this vendor's email address, or browse other vendors" : "Navigate to the Vendors page to browse available vendors"}
-                </p>
-                <div className="flex items-center gap-3">
-                  <Button onClick={() => navigate('/vendors')} variant="outline">
+                <div className="flex flex-wrap items-center justify-center gap-3">
+                  <Button onClick={() => navigate('/vendors')} variant="outline" size="sm">
                     Browse Vendors
                   </Button>
                   {vendorId && (
-                    <Button onClick={() => navigate('/email-sync')}>
+                    <Button onClick={() => navigate('/email-sync')} size="sm">
                       Go to Email Sync
                     </Button>
                   )}
                 </div>
-              </>
+              </div>
             ) : (
-              <>
-                <FileText className="h-12 w-12 text-muted-foreground my-4 pt-2" />
-                <h3 className="text-lg font-semibold mb-2">No Matches</h3>
+              <div className="flex flex-col items-center text-center">
+                <div className="h-14 w-14 rounded-full bg-muted flex items-center justify-center mb-4">
+                  <Search className="h-7 w-7 text-muted-foreground" />
+                </div>
+                <h3 className="text-lg font-semibold mb-2">No Matches Found</h3>
                 <p className="text-sm text-muted-foreground mb-4">
-                  No invoices match your search query "{searchQuery}"
+                  No invoices match "{searchQuery}"
                 </p>
-                <Button onClick={() => navigate('/vendors')} variant="outline">
-                  Browse Other Vendors
+                <Button onClick={() => setSearchQuery("")} variant="outline" size="sm">
+                  Clear Search
                 </Button>
-              </>
+              </div>
             )}
           </CardContent>
         </Card>
