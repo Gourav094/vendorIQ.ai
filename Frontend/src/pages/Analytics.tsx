@@ -88,7 +88,7 @@ export default function Analytics() {
   // Handle refresh (refetch analytics directly)
   const handleRefresh = async () => {
     if (!user?.id) {
-      toast({ title: "Login Required", description: "Please log in to view analytics", variant: "destructive" });
+      toast({ description: "Please log in to view analytics", variant: "destructive" });
       return;
     }
     await refetch();
@@ -97,7 +97,7 @@ export default function Analytics() {
   // Handle sync (index documents then refresh)
   const handleSync = async () => {
     if (!user?.id) {
-      toast({ title: "Login Required", description: "Please log in to sync documents", variant: "destructive" });
+      toast({ description: "Please log in to sync documents", variant: "destructive" });
       return;
     }
 
@@ -109,14 +109,14 @@ export default function Analytics() {
       console.log("Sync response:", { data, status: response.status });
       
       if (response.ok && data.success) {
-        toast({ title: "✓ Sync Complete", description: data.message || "Documents synced successfully" });
+        toast({ description: data.message || "Documents synced successfully" });
         // Refresh analytics after successful sync
         await refetch();
       } else {
-        toast({ title: "Sync Info", description: data.message || "No new documents to sync" });
+        toast({ description: data.message || "No new documents to sync" });
       }
     } catch (err) {
-      toast({ title: "Sync Failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
+      toast({ description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
     } finally {
       setIsSyncing(false);
     }
@@ -195,9 +195,7 @@ export default function Analytics() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] w-full px-4">
         <div className="flex flex-col items-center gap-6 max-w-lg text-center">
-          <div className="h-20 w-20 rounded-full bg-destructive/10 flex items-center justify-center">
-            <AlertCircle className="h-10 w-10 text-destructive" />
-          </div>
+          <AlertCircle className="h-10 w-10 text-destructive" />
           <h2 className="text-2xl font-semibold text-foreground">
             Unable to Load Analytics
           </h2>

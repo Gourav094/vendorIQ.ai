@@ -109,8 +109,8 @@ async def sync_documents(request: SyncRequest):
                 {"vendorName": vendor_name, "records": master_records}
             ])
             
-            # Index into vector DB with user_id
-            result = orchestrator.process_direct_dataset(dataset, user_id, incremental=True)
+            # Index into vector DB with user_id 
+            result = orchestrator.process_direct_dataset(dataset, user_id, incremental=False)
             
             if result.get("success"):
                 # Mark these documents as indexed

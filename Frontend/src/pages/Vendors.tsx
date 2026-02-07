@@ -27,7 +27,6 @@ const Vendors = () => {
   useEffect(() => {
     if (!user) {
       toast({
-        title: "Authentication Required",
         description: "Please log in to view vendors",
         variant: "destructive",
       });
@@ -52,13 +51,11 @@ const Vendors = () => {
       const errorMessage = error?.message || "Unknown error";
       if (errorMessage.includes("Invalid User ID")) {
         toast({
-          title: "⚠️ Invalid User ID Format",
           description: "User ID must be exactly 24 characters (hexadecimal). Example: 690c7d0ee107fb31784c1b1b",
           variant: "destructive",
         });
       } else {
         toast({
-          title: "⚠️ Unable to Load Vendors",
           description: "Failed to fetch vendors from Google Drive. Please check your Google connection.",
           variant: "destructive",
         });

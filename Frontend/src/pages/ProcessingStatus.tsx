@@ -111,8 +111,6 @@ export default function ProcessingStatus() {
         } catch (error) {
             console.error("Failed to load processing status:", error);
             toast({
-                variant: "destructive",
-                title: "Error",
                 description: "Failed to load processing status. Please try again."
             });
         } finally {
@@ -127,7 +125,6 @@ export default function ProcessingStatus() {
 
             if (response.ok) {
                 toast({
-                    title: "Retry Initiated",
                     description: "The job has been queued for retry. Refresh to see updated status."
                 });
 
@@ -138,8 +135,6 @@ export default function ProcessingStatus() {
             }
         } catch (error: any) {
             toast({
-                variant: "destructive",
-                title: "Retry Failed",
                 description: error.message || "Could not retry the job."
             });
         } finally {
@@ -160,7 +155,6 @@ export default function ProcessingStatus() {
 
                 if (response.ok && data.success) {
                     toast({
-                        title: "Processing Started",
                         description: "Document processing has been initiated. Check status for updates."
                     });
                     await loadStatus();
@@ -173,7 +167,6 @@ export default function ProcessingStatus() {
 
                 if (response.ok && data.success) {
                     toast({
-                        title: "Retry Initiated",
                         description: data.message || "Document retry has been queued for processing."
                     });
                     await loadStatus();
@@ -183,8 +176,6 @@ export default function ProcessingStatus() {
             }
         } catch (error: any) {
             toast({
-                variant: "destructive",
-                title: status === "PENDING" ? "Processing Failed" : "Retry Failed",
                 description: error.message || "Could not process the document."
             });
         } finally {
@@ -201,7 +192,6 @@ export default function ProcessingStatus() {
 
             if (response.ok && data.success) {
                 toast({
-                    title: "Retry Complete",
                     description: `Retried ${data.retried} documents. Check status for updates.`
                 });
                 await loadStatus();
@@ -210,8 +200,6 @@ export default function ProcessingStatus() {
             }
         } catch (error: any) {
             toast({
-                variant: "destructive",
-                title: "Retry Failed",
                 description: error.message || "Could not retry documents."
             });
         } finally {
@@ -228,7 +216,6 @@ export default function ProcessingStatus() {
 
             if (response.ok && data.success) {
                 toast({
-                    title: "Retry Complete",
                     description: `Retried ${data.retried} documents for ${vendorName}.`
                 });
                 await loadStatus();
@@ -237,8 +224,6 @@ export default function ProcessingStatus() {
             }
         } catch (error: any) {
             toast({
-                variant: "destructive",
-                title: "Retry Failed",
                 description: error.message || "Could not retry vendor documents."
             });
         } finally {
@@ -255,7 +240,6 @@ export default function ProcessingStatus() {
 
             if (response.ok) {
                 toast({
-                    title: "✨ AI Sync Complete",
                     description: data.message || "Completed invoices have been synced to AI knowledge base. You can now use Chat and Analytics."
                 });
             } else {
@@ -263,8 +247,6 @@ export default function ProcessingStatus() {
             }
         } catch (error: any) {
             toast({
-                variant: "destructive",
-                title: "Sync Failed",
                 description: error.message || "Could not sync to AI knowledge base."
             });
         } finally {
