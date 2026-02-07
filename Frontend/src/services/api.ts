@@ -676,28 +676,39 @@ export async function getVendorMaster(userId: string, vendorId: string) {
 // ===============================================
 
 export async function getChatAnswer(question: string, vendorName?: string, userId?: string) {
-  const qs = new URLSearchParams({ question });
-  if (vendorName) qs.append("vendor_name", vendorName);
-  if (userId) qs.append("userId", userId);
-
   return apiCall<ChatAnswerResponse>(
-    `/chat/api/v1/query?${qs.toString()}`
-  );
-}
-
-export async function loadChatKnowledge(userId: string, incremental = true) {
-  return apiCall(
-    `/chat/api/v1/sync`,
-    { 
+    `/chat/api/v1/query`,
+    {
       method: "POST",
-      body: JSON.stringify({ user_id: userId })
+      body: JSON.stringify({
+        userId,
+        question,
+        vendorName: vendorName || null
+      })
     }
   );
 }
 
-export async function getChatVendorSummary(vendorName: string) {
-  return apiCall<ChatVendorSummary>(
-    `/chat/api/v1/vendor/summary?vendor_name=${encodeURIComponent(vendorName)}`
+export async function syncChatDocuments(userId: string) {
+  return apiCall<{ success: boolean; documentsIndexed: number; message: string }>(
+    `/chat/api/v1/sync`,
+    { 
+      method: "POST",
+      body: JSON.stringify({ userId })
+    }
+  );
+}
+
+export async function deleteChatUserData(userId: string) {
+  return apiCall<{ success: boolean; message: string; mongodbDocsReset: number }>(
+    `/chat/api/v1/user/${userId}/data`,
+    { method: "DELETE" }
+  );
+}
+
+export async function getChatStats(userId: string) {
+  return apiCall<{ total: number; ocr_completed: number; indexed: number; pending_index: number }>(
+    `/chat/api/v1/stats?userId=${userId}`
   );
 }
 
@@ -707,6 +718,26 @@ export async function getAnalytics(period: string, userId?: string) {
 
   return apiCall<AnalyticsResponse>(
     `/chat/api/v1/analytics?${qs.toString()}`
+  );
+}
+
+// @deprecated - Use syncChatDocuments instead
+export async function loadChatKnowledge(userId: string, incremental = true) {
+  return syncChatDocuments(userId);
+}
+
+// @deprecated - Vendor summary endpoint removed in v2.0
+export async function getChatVendorSummary(vendorName: string) {
+  console.warn("getChatVendorSummary is deprecated - use getChatAnswer with vendorName filter");
+  return apiCall<ChatVendorSummary>(
+    `/chat/api/v1/query`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        question: `Give me a summary of ${vendorName}`,
+        vendorName
+      })
+    }
   );
 }
 
@@ -881,9 +912,12 @@ export const api = {
 
   // Chat
   getChatAnswer,
+  syncChatDocuments,
+  deleteChatUserData,
+  getChatStats,
+  getAnalytics,
   loadChatKnowledge,
   getChatVendorSummary,
-  getAnalytics,
 };
 
 export default api;

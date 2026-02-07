@@ -30,6 +30,7 @@ class VendorDataset(BaseModel):
 
 class KnowledgeChunk(BaseModel):
     chunk_id: str
+    user_id: str  # ← Added for user isolation
     vendor_name: str
     content: str
     metadata: dict

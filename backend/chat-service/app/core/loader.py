@@ -222,23 +222,23 @@ class VendorDataLoader:
             # Fallback for unexpected format
             return Vendor(vendor_name="Unknown", last_updated=datetime.now().isoformat(), invoices=[])
     
-    def convert_to_knowledge_chunks(self, dataset: VendorDataset) -> List[KnowledgeChunk]:
+    def convert_to_knowledge_chunks(self, dataset: VendorDataset, user_id: str) -> List[KnowledgeChunk]:
         """Convert vendor dataset to knowledge text chunks for embedding."""
         chunks = []
         
         for vendor in dataset.vendors:
             # Create vendor summary chunk
-            vendor_summary = self._create_vendor_summary_chunk(vendor)
+            vendor_summary = self._create_vendor_summary_chunk(vendor, user_id)
             chunks.append(vendor_summary)
             
             # Create individual invoice chunks
             for invoice in vendor.invoices:
-                invoice_chunk = self._create_invoice_chunk(vendor, invoice)
+                invoice_chunk = self._create_invoice_chunk(vendor, invoice, user_id)
                 chunks.append(invoice_chunk)
         
         return chunks
     
-    def _create_vendor_summary_chunk(self, vendor: Vendor) -> KnowledgeChunk:
+    def _create_vendor_summary_chunk(self, vendor: Vendor, user_id: str) -> KnowledgeChunk:
         """Create a summary chunk for a vendor."""
         def _parse_amount(val: Any) -> float:
             if val is None:
@@ -268,9 +268,11 @@ class VendorDataLoader:
         
         return KnowledgeChunk(
             chunk_id=chunk_id,
+            user_id=user_id,  # ← Add user_id
             vendor_name=vendor.vendor_name,
             content=content.strip(),
             metadata={
+                "user_id": user_id,  # ← Add to metadata
                 "type": "vendor_summary",
                 "vendor_name": vendor.vendor_name,
                 "last_updated": vendor.last_updated,
@@ -279,7 +281,7 @@ class VendorDataLoader:
             }
         )
     
-    def _create_invoice_chunk(self, vendor: Vendor, invoice: Invoice) -> KnowledgeChunk:
+    def _create_invoice_chunk(self, vendor: Vendor, invoice: Invoice, user_id: str) -> KnowledgeChunk:
         """Create a knowledge chunk for an individual invoice."""
         def _parse_amount(val: Any) -> float:
             if val is None:
@@ -334,9 +336,11 @@ class VendorDataLoader:
         
         return KnowledgeChunk(
             chunk_id=chunk_id,
+            user_id=user_id,  # ← Add user_id
             vendor_name=vendor.vendor_name,
             content=content.strip(),
             metadata={
+                "user_id": user_id,  # ← Add to metadata
                 "type": "invoice",
                 "vendor_name": vendor.vendor_name,
                 "invoice_number": invoice.invoice_number,

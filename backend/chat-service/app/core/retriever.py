@@ -150,7 +150,6 @@ class VectorDatabase:
             print(f"Error storing embeddings: {str(e)}")
             return False
     
-    # Existing generic search retained (internal)
     def search(self, query_embedding: List[float], n_results: int = 5) -> Dict[str, Any]:
         """Search for similar chunks using vector similarity."""
         try:
@@ -170,17 +169,37 @@ class VectorDatabase:
             print(f"Error searching vector database: {str(e)}")
             return {"documents": [], "metadatas": [], "distances": []}
     
-    # Added alias expected by orchestrator
-    def search_similar(self, query_embedding: List[float], n_results: int = 5) -> Dict[str, Any]:
-        return self.search(query_embedding, n_results)
-
-    # Added filtered similarity search by vendor_name
-    def search_similar_filtered(self, query_embedding: List[float], vendor_name: str, n_results: int = 5) -> Dict[str, Any]:
+    def search_similar(self, query_embedding: List[float], user_id: str, n_results: int = 5) -> Dict[str, Any]:
+        """Search for similar chunks using vector similarity, filtered by user_id."""
         try:
             results = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=n_results,
-                where={"vendor_name": vendor_name},
+                where={"user_id": user_id},  # ← Filter by user
+                include=["documents", "metadatas", "distances"]
+            )
+            
+            return {
+                "documents": results["documents"][0] if results["documents"] else [],
+                "metadatas": results["metadatas"][0] if results["metadatas"] else [],
+                "distances": results["distances"][0] if results["distances"] else []
+            }
+            
+        except Exception as e:
+            print(f"Error searching vector database: {str(e)}")
+            return {"documents": [], "metadatas": [], "distances": []}
+
+    def search_similar_filtered(self, query_embedding: List[float], user_id: str, vendor_name: str = None, n_results: int = 5) -> Dict[str, Any]:
+        """Search with user_id and optional vendor_name filter."""
+        try:
+            where_clause = {"user_id": user_id}
+            if vendor_name:
+                where_clause["vendor_name"] = vendor_name
+            
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                where=where_clause,
                 include=["documents", "metadatas", "distances"],
             )
             return {
@@ -208,6 +227,24 @@ class VectorDatabase:
             print(f"Error searching by vendor: {str(e)}")
             return {"documents": [], "metadatas": [], "distances": []}
 
+    def get_all_by_user(self, user_id: str, vendor_name: str = None) -> Dict[str, Any]:
+        """Get all documents for a user, optionally filtered by vendor."""
+        try:
+            where_clause = {"user_id": user_id}
+            if vendor_name:
+                where_clause["vendor_name"] = vendor_name
+                
+            results = self.collection.get(
+                where=where_clause, 
+                include=["documents", "metadatas"]
+            )
+            return {
+                "documents": results.get("documents", []),
+                "metadatas": results.get("metadatas", []),
+            }
+        except Exception as e:
+            print(f"Error getting data by user: {e}")
+            return {"documents": [], "metadatas": []}
 
     def list_ids(self) -> List[str]:
         """List all chunk IDs in the collection."""
@@ -244,16 +281,19 @@ class VectorDatabase:
             print(f"Error clearing database: {str(e)}")
             return False
 
-    def list_vendors(self) -> List[str]:
-        """Return distinct vendor names (cached; falls back to scan metadata)."""
-        if self.vendor_names:
-            return sorted(self.vendor_names)
+    def list_vendors(self, user_id: str = None) -> List[str]:
+        """Return distinct vendor names for a user."""
         try:
-            data = self.collection.get(include=["metadatas"])
+            where_clause = {"user_id": user_id} if user_id else None
+            data = self.collection.get(
+                where=where_clause,
+                include=["metadatas"]
+            )
+            vendors = set()
             for meta in data.get("metadatas", []):
                 if isinstance(meta, dict) and meta.get("vendor_name"):
-                    self.vendor_names.add(meta["vendor_name"])
-            return sorted(self.vendor_names)
+                    vendors.add(meta["vendor_name"])
+            return sorted(vendors)
         except Exception as e:
             print(f"Error listing vendors: {e}")
             return []
@@ -270,13 +310,17 @@ class VectorDatabase:
             print(f"Error getting all by vendor: {e}")
             return {"documents": [], "metadatas": []}
 
-    def get_vendor_spend_totals(self) -> List[Dict[str, Any]]:
-        """Aggregate total_amount across all invoice chunks grouped by vendor_name."""
+    def get_vendor_spend_totals(self, user_id: str) -> List[Dict[str, Any]]:
+        """Aggregate total_amount by vendor for a specific user."""
         try:
-            data = self.collection.get(include=["metadatas"])
+            data = self.collection.get(
+                where={"user_id": user_id},
+                include=["metadatas"]
+            )
             totals: Dict[str, float] = {}
             invoice_counts: Dict[str, int] = {}
             all_vendors: set[str] = set()
+            
             for meta in data.get("metadatas", []):
                 if not isinstance(meta, dict):
                     continue
@@ -287,7 +331,7 @@ class VectorDatabase:
                     continue
                 vendor = meta.get("vendor_name") or "Unknown"
                 raw_amount = meta.get("total_amount")
-                amount = 0.0
+                
                 def _parse_amount(val):
                     if val is None:
                         return 0.0
@@ -299,7 +343,9 @@ class VectorDatabase:
                         return float(s) if s else 0.0
                     except Exception:
                         return 0.0
+                
                 amount = _parse_amount(raw_amount)
+                
                 # Fallback: sum line item amounts if invoice total missing/zero
                 if amount == 0.0 and meta.get("line_items"):
                     import json
@@ -315,8 +361,10 @@ class VectorDatabase:
                             amount = li_total
                     except Exception:
                         pass
+                
                 totals[vendor] = totals.get(vendor, 0.0) + amount
                 invoice_counts[vendor] = invoice_counts.get(vendor, 0) + 1
+            
             ranking = [
                 {
                     "vendor_name": v,
@@ -325,12 +373,36 @@ class VectorDatabase:
                 }
                 for v in totals.keys()
             ]
-            # Add vendors with zero spend (no invoices indexed yet)
+            
+            # Add vendors with zero spend
             zero_vendors = [v for v in all_vendors if v not in totals]
             for zv in zero_vendors:
                 ranking.append({"vendor_name": zv, "total_spend": 0.0, "invoice_count": 0})
+            
             ranking.sort(key=lambda x: x["total_spend"], reverse=True)
             return ranking
         except Exception as e:
             print(f"Error computing vendor spend totals: {e}")
             return []
+
+    def delete_user_data(self, user_id: str) -> bool:
+        """Delete all data for a specific user."""
+        try:
+            # Get all IDs for this user
+            results = self.collection.get(
+                where={"user_id": user_id},
+                include=[]
+            )
+            ids_to_delete = results.get("ids", [])
+            
+            if ids_to_delete:
+                self.collection.delete(ids=ids_to_delete)
+                print(f"Deleted {len(ids_to_delete)} chunks for user {user_id}")
+                return True
+            else:
+                print(f"No data found for user {user_id}")
+                return True
+                
+        except Exception as e:
+            print(f"Error deleting user data: {e}")
+            return False

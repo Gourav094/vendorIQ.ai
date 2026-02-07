@@ -1,20 +1,19 @@
 """
-Chat Service - Simplified REST API
+Chat Service - Simplified REST API with User Isolation
 
 Endpoints:
-  POST /sync       - Index unindexed documents for a user
-  GET  /query      - Ask questions (RAG)
-  GET  /analytics  - Get spend analytics
-  DELETE /reset    - Clear all indexed data
+  POST /sync       - Index OCR-processed documents for a user
+  POST /query      - Ask questions with RAG (user isolated)
+  GET  /analytics  - Get spend analytics per user
+  DELETE /user/{user_id}/data - Delete all user data
+  GET  /stats      - Get document indexing stats
   GET  /health     - Health check
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Path
 from pydantic import BaseModel
 from typing import Optional
 from app.core.orchestrator import VendorKnowledgeOrchestrator
-from app.db import get_unindexed_documents, mark_documents_indexed, reset_user_index, get_user_document_stats
-import os
-import json
+from app.db import get_unindexed_documents, mark_documents_indexed, get_user_document_stats
 import httpx
 
 router = APIRouter(tags=["Chat Service"])
@@ -34,31 +33,31 @@ def get_orchestrator():
 # ============================================================================
 
 class SyncRequest(BaseModel):
-    user_id: str
-    refresh_token: Optional[str] = None  # Needed to fetch master.json from Drive
+    userId: str
+    refreshToken: Optional[str] = None
 
 class SyncResponse(BaseModel):
     success: bool
-    documents_indexed: int
+    documentsIndexed: int
     message: str
 
 
 @router.post("/sync", response_model=SyncResponse, summary="Sync & Index Documents")
 async def sync_documents(request: SyncRequest):
     """
-    Index documents that have completed OCR but not yet indexed.
+    Index documents that completed OCR but not yet indexed.
     
     Flow:
     1. Query MongoDB for documents where ocr_status=COMPLETED and indexed=false
-    2. For each document, call email-storage-service to get master.json
-    3. Email-storage-service fetches from Google Drive
-    4. Create embeddings and store in vector DB
+    2. For each vendor, fetch master.json from email-storage-service
+    3. Create embeddings with user_id in metadata
+    4. Store in vector DB (user isolated)
     5. Mark documents as indexed in MongoDB
     """
-    user_id = request.user_id
+    user_id = request.userId
     
     if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+        raise HTTPException(status_code=400, detail="userId is required")
     
     # Get unindexed documents from MongoDB
     unindexed = get_unindexed_documents(user_id)
@@ -66,7 +65,7 @@ async def sync_documents(request: SyncRequest):
     if not unindexed:
         return SyncResponse(
             success=True,
-            documents_indexed=0,
+            documentsIndexed=0,
             message="No documents pending indexing"
         )
     
@@ -77,7 +76,7 @@ async def sync_documents(request: SyncRequest):
     vendors_data = {}
     for doc in unindexed:
         vendor_name = doc.get("vendorName", "Unknown")
-        vendor_folder_id = doc.get("vendorFolderId")  # ← Use vendorFolderId, not invoiceFolderId
+        vendor_folder_id = doc.get("vendorFolderId")
         
         if not vendor_folder_id:
             print(f"Skipping document {doc.get('driveFileId')}: no vendorFolderId")
@@ -85,7 +84,7 @@ async def sync_documents(request: SyncRequest):
             
         if vendor_name not in vendors_data:
             vendors_data[vendor_name] = {
-                "vendor_folder_id": vendor_folder_id,  # ← Changed key name
+                "vendor_folder_id": vendor_folder_id,
                 "docs": []
             }
         vendors_data[vendor_name]["docs"].append(doc)
@@ -98,7 +97,7 @@ async def sync_documents(request: SyncRequest):
             # Fetch master.json via email-storage-service
             master_records = await _fetch_master_via_email_service(
                 user_id,
-                vendor_info["vendor_folder_id"]  # ← Use vendorFolderId
+                vendor_info["vendor_folder_id"]
             )
             
             if not master_records:
@@ -110,8 +109,8 @@ async def sync_documents(request: SyncRequest):
                 {"vendorName": vendor_name, "records": master_records}
             ])
             
-            # Index into vector DB
-            result = orchestrator.process_direct_dataset(dataset, incremental=True)
+            # Index into vector DB with user_id
+            result = orchestrator.process_direct_dataset(dataset, user_id, incremental=True)
             
             if result.get("success"):
                 # Mark these documents as indexed
@@ -131,48 +130,34 @@ async def sync_documents(request: SyncRequest):
     
     return SyncResponse(
         success=True,
-        documents_indexed=len(indexed_file_ids),
+        documentsIndexed=len(indexed_file_ids),
         message=f"Indexed {len(indexed_file_ids)} documents from {len(vendors_data)} vendors"
     )
 
 
-async def _fetch_master_via_email_service(user_id: str, invoice_folder_id: str) -> list:
-    """Fetch master.json via email-storage-service (which fetches from Google Drive)."""
+async def _fetch_master_via_email_service(user_id: str, vendor_folder_id: str) -> list:
+    """Fetch master.json via email-storage-service."""
     try:
         from app.config import EMAIL_STORAGE_SERVICE_URL
         
-        # Call email-storage-service to get master.json
-        # Email-storage-service handles Drive authentication and fetching
-        url = f"{EMAIL_STORAGE_SERVICE_URL}/drive/users/{user_id}/vendors/{invoice_folder_id}/master"
+        url = f"{EMAIL_STORAGE_SERVICE_URL}/drive/users/{user_id}/vendors/{vendor_folder_id}/master"
         
         print(f"📞 Calling email-storage-service: {url}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url)
             
-            print(f"📥 Response status: {response.status_code}")
-            
             if response.status_code != 200:
-                print(f"❌ Failed to fetch master.json via email-storage-service: {response.status_code}")
+                print(f"❌ Failed to fetch master.json: {response.status_code}")
                 return []
             
             data = response.json()
-            
-            # Debug: Print the entire response structure
-            print(f"📦 Response data keys: {list(data.keys())}")
-            print(f"📦 Full response: {json.dumps(data, indent=2)}")
-            
-            # The API returns { userId, vendorFolderId, invoiceFolderId, records: [...] }
-            if data.get("records") is not None:
-                records = data["records"]
-                print(f"✓ Fetched {len(records)} records from master.json")
-                return records if isinstance(records, list) else []
-            else:
-                print(f"⚠️  No 'records' field in response")
-                return []
+            records = data.get("records", [])
+            print(f"✓ Fetched {len(records)} records from master.json")
+            return records if isinstance(records, list) else []
             
     except Exception as e:
-        print(f"💥 Error fetching master.json via email-storage-service: {e}")
+        print(f"💥 Error fetching master.json: {e}")
         import traceback
         traceback.print_exc()
         return []
@@ -182,51 +167,57 @@ async def _fetch_master_via_email_service(user_id: str, invoice_folder_id: str) 
 # QUERY - Ask questions using RAG
 # ============================================================================
 
-@router.get("/query", summary="Ask a Question")
-async def query(
-    q: str = Query(..., description="Your question"),
-    vendor: Optional[str] = Query(None, description="Filter by vendor name"),
-    user_id: Optional[str] = Query(None, description="User ID for access control"),
-):
+class QueryRequest(BaseModel):
+    userId: str
+    question: str
+    vendorName: Optional[str] = None
+
+class QueryResponse(BaseModel):
+    success: bool
+    answer: str
+    sources: list
+    vendorName: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.post("/query", response_model=QueryResponse, summary="Ask a Question")
+async def query(request: QueryRequest):
     """
-    Ask a question about your invoice data.
+    Ask a question about invoice data using RAG.
+    
+    - If vendorName is provided, search only that vendor's data
+    - Otherwise, search across all vendors for this user
+    - All queries are user-isolated (no cross-user data access)
     
     Examples:
     - "What is my total spend?"
-    - "Show invoices from Acme Corp"
+    - "Show invoices from Acme Corp" (with vendorName="Acme Corp")
     - "Which vendor has the highest spend?"
     """
+    if not request.userId:
+        raise HTTPException(status_code=400, detail="userId is required")
+    
+    if not request.question:
+        raise HTTPException(status_code=400, detail="question is required")
+    
     orchestrator = get_orchestrator()
     
-    # Optional: verify user has Google connection
-    if user_id:
-        connected = await _check_user_connection(user_id)
-        if not connected:
-            raise HTTPException(status_code=403, detail="Google account not connected")
-    
-    result = orchestrator.answer_query(question=q, vendor_name=vendor)
+    result = orchestrator.answer_query(
+        question=request.question,
+        user_id=request.userId,
+        vendor_name=request.vendorName
+    )
     
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "Query failed"))
     
-    return {
-        "answer": result.get("answer"),
-        "sources": result.get("sources", []),
-        "vendor": result.get("vendor_name"),
-    }
-
-
-async def _check_user_connection(user_id: str) -> bool:
-    """Check if user has active Google connection."""
-    try:
-        base_url = os.getenv("EMAIL_STORAGE_SERVICE_URL", "http://localhost:4002/api/v1")
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{base_url}/users/{user_id}/sync-status")
-            if resp.status_code == 200:
-                return resp.json().get("hasGoogleConnection", False)
-    except Exception:
-        pass
-    return True  # Default to allowing if check fails
+    return QueryResponse(
+        success=True,
+        answer=result.get("answer", ""),
+        sources=result.get("sources", []),
+        vendorName=result.get("vendor_name"),
+        message=result.get("message")
+    )
 
 
 # ============================================================================
@@ -235,20 +226,25 @@ async def _check_user_connection(user_id: str) -> bool:
 
 @router.get("/analytics", summary="Get Analytics")
 async def analytics(
+    userId: str = Query(..., description="User ID"),
     period: str = Query("year", description="Time period: month, quarter, year, all"),
-    user_id: Optional[str] = Query(None, description="User ID (for future per-user scoping)"),
 ):
     """
-    Get spend analytics and trends.
+    Get spend analytics and trends for a user.
     
     Returns:
     - Total spend and invoice count
     - Top vendors by spend
     - Monthly/quarterly trends
     - AI-generated summary
+    
+    All data is user-isolated.
     """
+    if not userId:
+        raise HTTPException(status_code=400, detail="userId is required")
+    
     orchestrator = get_orchestrator()
-    result = orchestrator.get_analytics(period=period)
+    result = orchestrator.get_analytics(user_id=userId, period=period)
     
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("message", "Analytics unavailable"))
@@ -257,31 +253,50 @@ async def analytics(
 
 
 # ============================================================================
-# RESET - Clear all indexed data
+# DELETE USER DATA - Clear all user data from vector DB
 # ============================================================================
 
-@router.delete("/reset", summary="Reset Index")
-async def reset(
-    user_id: Optional[str] = Query(None, description="Reset for specific user (clears MongoDB indexed flags)"),
+@router.delete("/user/{user_id}/data", summary="Delete User Data")
+async def delete_user_data(
+    user_id: str = Path(..., description="User ID to delete data for"),
 ):
     """
-    Clear the vector database and optionally reset MongoDB indexed flags.
+    Delete all indexed data for a specific user from the vector database.
     
-    Use this when you want to re-index all documents from scratch.
+    This is useful when:
+    - User wants to re-index all documents from scratch
+    - User wants to clear all their data
+    
+    Note: This does NOT affect MongoDB document records or Google Drive files.
     """
-    orchestrator = get_orchestrator()
-    result = orchestrator.reset_database()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
     
-    # Also reset MongoDB indexed flags if user_id provided
-    docs_reset = 0
-    if user_id:
-        docs_reset = reset_user_index(user_id)
+    orchestrator = get_orchestrator()
+    result = orchestrator.delete_user_data(user_id)
+    
+    # Also reset MongoDB indexed flags
+    from app.db import reset_user_index
+    docs_reset = reset_user_index(user_id)
     
     return {
         "success": result.get("success"),
         "message": result.get("message"),
-        "mongodb_docs_reset": docs_reset,
+        "mongodbDocsReset": docs_reset,
     }
+
+
+# ============================================================================
+# STATS - Get document indexing stats
+# ============================================================================
+
+@router.get("/stats", summary="Get Indexing Stats")
+async def stats(userId: str = Query(..., description="User ID")):
+    """Get document indexing statistics for a user."""
+    if not userId:
+        raise HTTPException(status_code=400, detail="userId is required")
+    
+    return get_user_document_stats(userId)
 
 
 # ============================================================================
@@ -297,15 +312,6 @@ async def health():
     return {
         "status": "ok" if stats.get("success") else "error",
         "service": "chat-service",
-        "vector_db": stats.get("stats", {}),
+        "version": "2.0.0",
+        "vectorDb": stats.get("stats", {}),
     }
-
-
-# ============================================================================
-# STATS - Get document indexing stats
-# ============================================================================
-
-@router.get("/stats", summary="Get Indexing Stats")
-async def stats(user_id: str = Query(..., description="User ID")):
-    """Get document indexing statistics for a user."""
-    return get_user_document_stats(user_id)
