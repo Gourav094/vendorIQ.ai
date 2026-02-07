@@ -106,7 +106,6 @@ const AIAssistant: React.FC = () => {
     if (!/^[a-f0-9]{24}$/i.test(effectiveUserId)) {
       setVendorError("Invalid User ID format");
       toast({
-        title: "⚠️ Invalid User ID Format",
         description: "User ID must be a 24-char hex ObjectId.",
         variant: "destructive"
       });
@@ -143,7 +142,6 @@ const AIAssistant: React.FC = () => {
       setVendorError(errMsg);
       vendorsLoadedRef.current = false;
       toast({
-        title: "⚠️ Unable to Load Vendors",
         description: errMsg,
         variant: "destructive",
       });

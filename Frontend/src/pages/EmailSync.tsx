@@ -120,7 +120,6 @@ const EmailSync = () => {
 
       addLog("success", `✓ Google account connected successfully as ${email}`);
       toast({
-        title: "Connected!",
         description: `Google account connected as ${email}`,
       });
 
@@ -168,7 +167,6 @@ const EmailSync = () => {
   const fetchEmails = async () => {
     if (!userId || !/^[a-f0-9]{24}$/i.test(userId)) {
       toast({
-        title: "Invalid User ID",
         description: "Please provide a valid 24-character MongoDB ObjectId.",
         variant: "destructive",
       });
@@ -177,7 +175,6 @@ const EmailSync = () => {
 
     if (!fromDate) {
       toast({
-        title: "Missing Date",
         description: "Please select a 'From Date'.",
         variant: "destructive",
       });
@@ -237,7 +234,6 @@ const EmailSync = () => {
         }
 
         toast({
-          title: "✅ Fetch Complete!",
           description: `${filesUploaded} files uploaded from ${totalProcessed} emails`,
         });
 
@@ -247,7 +243,6 @@ const EmailSync = () => {
       } else if (result.status === "failed") {
         addLog("error", `✗ Job failed: ${result.error?.message || "Unknown error"}`);
         toast({
-          title: "Error",
           description: result.error?.message || "Email fetch failed",
           variant: "destructive",
         });
@@ -255,7 +250,6 @@ const EmailSync = () => {
     } catch (error) {
       addLog("error", `Network error: ${error instanceof Error ? error.message : "Unknown error"}`);
       toast({
-        title: "Network Error",
         description: error instanceof Error ? error.message : "Could not connect to email service",
         variant: "destructive",
       });
@@ -302,7 +296,6 @@ const EmailSync = () => {
       if (response.ok) {
         addLog("success", "✓ Sync status reset successfully");
         toast({
-          title: "Success",
           description: "Sync status reset. Next fetch will use the fromDate parameter.",
         });
         fetchSyncStatus();
@@ -310,7 +303,6 @@ const EmailSync = () => {
         const errorMessage = (data as any)?.message || "Failed to reset sync status";
         addLog("error", errorMessage);
         toast({
-          title: "Error",
           description: errorMessage,
           variant: "destructive",
         });

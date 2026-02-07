@@ -254,7 +254,6 @@ const Invoices = () => {
       const cacheKey = getCacheKey(vendorId);
       localStorage.removeItem(cacheKey);
       toast({
-        title: "🔌 Connection Failed",
         description: "Cannot reach the email service. Please ensure the backend is running on port 4002.",
       });
     } finally {

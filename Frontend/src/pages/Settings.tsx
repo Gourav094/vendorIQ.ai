@@ -55,7 +55,6 @@ const Settings = () => {
 
     if (connected === 'true' && email) {
       toast({
-        title: "Google Account Connected!",
         description: `Successfully connected as ${email}`,
       });
 
@@ -70,7 +69,6 @@ const Settings = () => {
   const connectGoogleAccount = () => {
     if (!user?.id) {
       toast({
-        title: "Not Logged In",
         description: "Please log in before connecting Google account",
         variant: "destructive"
       });
@@ -88,12 +86,12 @@ const Settings = () => {
       if (response.ok) {
         setIsConnected(false);
         setSyncStatus(s => s ? { ...s, hasGoogleConnection: false } : s);
-        toast({ title: "Disconnected", description: (data as any).message || "Google account disconnected." });
+        toast({ description: (data as any).message || "Google account disconnected." });
       } else {
-        toast({ title: "Disconnect Failed", description: (data as any).message || 'Unknown error', variant: 'destructive' });
+        toast({description: (data as any).message || 'Unknown error', variant: 'destructive' });
       }
     } catch (e) {
-      toast({ title: "Network Error", description: 'Failed to disconnect. Try again later.', variant: 'destructive' });
+      toast({description: 'Failed to disconnect. Try again later.', variant: 'destructive' });
     }
   };
 
