@@ -192,9 +192,16 @@ class VectorDatabase:
     def search_similar_filtered(self, query_embedding: List[float], user_id: str, vendor_name: str = None, n_results: int = 5) -> Dict[str, Any]:
         """Search with user_id and optional vendor_name filter."""
         try:
-            where_clause = {"user_id": user_id}
+            # ChromaDB requires $and for multiple conditions
             if vendor_name:
-                where_clause["vendor_name"] = vendor_name
+                where_clause = {
+                    "$and": [
+                        {"user_id": user_id},
+                        {"vendor_name": vendor_name}
+                    ]
+                }
+            else:
+                where_clause = {"user_id": user_id}
             
             results = self.collection.query(
                 query_embeddings=[query_embedding],
@@ -230,9 +237,16 @@ class VectorDatabase:
     def get_all_by_user(self, user_id: str, vendor_name: str = None) -> Dict[str, Any]:
         """Get all documents for a user, optionally filtered by vendor."""
         try:
-            where_clause = {"user_id": user_id}
+            # ChromaDB requires $and for multiple conditions
             if vendor_name:
-                where_clause["vendor_name"] = vendor_name
+                where_clause = {
+                    "$and": [
+                        {"user_id": user_id},
+                        {"vendor_name": vendor_name}
+                    ]
+                }
+            else:
+                where_clause = {"user_id": user_id}
                 
             results = self.collection.get(
                 where=where_clause, 

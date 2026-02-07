@@ -181,17 +181,29 @@ const AIAssistant: React.FC = () => {
 
     try {
       const effectiveUserId = resolveUserId();
-      // If vendor is selected and not 'ALL', pass it; otherwise let backend search all user's data
       const vendorToQuery = selectedVendorName && selectedVendorName !== 'ALL' ? selectedVendorName : undefined;
       const { data, response } = await getChatAnswer(value, vendorToQuery, effectiveUserId);
       
-      if (!response.ok || data.success === false) {
-        pushMessage({ sender: "error", text: data.message || `Error: HTTP ${response.status}` });
-      } else {
+      if (!response.ok) {
+        pushMessage({ sender: "error", text: (data as any).detail || data.message || `Error: HTTP ${response.status}` });
+      } else if (data.success === false) {
         pushMessage({
           sender: "assistant",
-          text: data.answer || "(No answer returned)",
-          sources: (data.sources || []).map((s: any, idx: number) => ({
+          text: data.answer || data.message || "I couldn't find relevant data to answer your question.",
+          sources: [],
+          vendorName: data.vendor_name ?? null,
+        });
+      } else {
+        // Check if answer contains quota/rate limit error
+        const answer = data.answer || "";
+        const isQuotaError = answer.includes("429") || answer.includes("quota") || answer.includes("rate-limit");
+        
+        pushMessage({
+          sender: isQuotaError ? "error" : "assistant",
+          text: isQuotaError 
+            ? "⚠️ AI service quota exceeded. Please try again in a minute." 
+            : (answer || "(No answer returned)"),
+          sources: isQuotaError ? [] : (data.sources || []).map((s: any, idx: number) => ({
             rank: s.rank ?? idx + 1,
             vendor_name: s.vendor_name || s.vendor || data.vendor_name,
             similarity: s.similarity,
