@@ -60,12 +60,34 @@ class VendorKnowledgeOrchestrator:
             )
             
             if not results["documents"]:
-                return {
-                    "success": False,
-                    "message": "No relevant documents found",
-                    "answer": "I don't have any invoice data to answer your question.",
-                    "sources": []
-                }
+                # Check if user has ANY data in the vector DB
+                all_user_data = self.vector_db.get_all_by_user(user_id)
+                user_doc_count = len(all_user_data.get("documents", []))
+                
+                # Check available vendors for this user
+                available_vendors = self.vector_db.list_vendors(user_id)
+                
+                if user_doc_count == 0:
+                    return {
+                        "success": False,
+                        "message": "No indexed data found for user. Please sync your emails first.",
+                        "answer": "I don't have any invoice data indexed for your account. Please sync your emails and process documents first.",
+                        "sources": []
+                    }
+                elif vendor_name and vendor_name not in available_vendors:
+                    return {
+                        "success": False,
+                        "message": f"No indexed data found for vendor '{vendor_name}'. Available vendors: {', '.join(available_vendors)}",
+                        "answer": f"I don't have any indexed invoices for vendor '{vendor_name}'. Available vendors are: {', '.join(available_vendors)}",
+                        "sources": []
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "message": "No relevant documents found for your query",
+                        "answer": "I couldn't find relevant invoice data to answer your question. Try rephrasing or ask about a different topic.",
+                        "sources": []
+                    }
             
             # Build sources for LLM
             sources = []

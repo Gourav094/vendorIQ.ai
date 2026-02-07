@@ -208,11 +208,9 @@ async def query(request: QueryRequest):
         vendor_name=request.vendorName
     )
     
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("message", "Query failed"))
-    
+    # Return the result even if no documents found - let frontend show the helpful message
     return QueryResponse(
-        success=True,
+        success=result.get("success", False),
         answer=result.get("answer", ""),
         sources=result.get("sources", []),
         vendorName=result.get("vendor_name"),
