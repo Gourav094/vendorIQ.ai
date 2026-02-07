@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { FiSend, FiPlus, FiSearch, FiX, FiChevronDown } from "react-icons/fi";
-import api, { getChatAnswer, getVendors, getChatVendorSummary } from "../services/api";
+import api, { getChatAnswer, getChatStats } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../hooks/use-toast";
 import { Sparkles } from "lucide-react";
@@ -27,10 +27,9 @@ const AIAssistant: React.FC = () => {
   const [vendorError, setVendorError] = useState<string>("");
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [selectedVendorName, setSelectedVendorName] = useState("");
-  const [vendorReady, setVendorReady] = useState(false);
-  const [vendorStatusMsg, setVendorStatusMsg] = useState("Select a vendor to begin.");
   const [isLoadingVendors, setIsLoadingVendors] = useState(false);
-  const { user } = useAuth(); // Use AuthContext for logged-in user
+  const [hasIndexedData, setHasIndexedData] = useState<boolean | null>(null); // null = loading, true/false = checked
+  const { user } = useAuth();
   const { toast } = useToast();
   const dropdownRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -38,7 +37,6 @@ const AIAssistant: React.FC = () => {
   const vendorsLoadedRef = useRef(false);
 
   const resolveUserId = () => {
-    // Use the authenticated user ID from AuthContext
     return user?.id || "";
   };
 
@@ -67,6 +65,31 @@ const AIAssistant: React.FC = () => {
     }
   }, [input]);
 
+  // Check if user has any indexed data on mount
+  useEffect(() => {
+    const checkIndexedData = async () => {
+      const effectiveUserId = resolveUserId();
+      if (!effectiveUserId) return;
+
+      try {
+        const { data, response } = await getChatStats(effectiveUserId);
+        if (response.ok) {
+          setHasIndexedData(data.indexed > 0);
+          if (data.indexed === 0) {
+            console.log("[AIAssistant] No indexed data found. User needs to sync first.");
+          }
+        }
+      } catch (e) {
+        console.error("[AIAssistant] Failed to check indexed data:", e);
+        setHasIndexedData(false);
+      }
+    };
+
+    if (user?.id) {
+      checkIndexedData();
+    }
+  }, [user?.id]);
+
   const loadVendors = useCallback(async (force = false) => {
     if (isLoadingVendors || (vendorsLoadedRef.current && !force)) {
       console.log('[AIAssistant] Skipping vendor load (already loaded or in progress)');
@@ -77,13 +100,11 @@ const AIAssistant: React.FC = () => {
 
     if (!effectiveUserId) {
       setVendorError("Missing user id");
-      setVendorStatusMsg("User missing");
       return;
     }
 
     if (!/^[a-f0-9]{24}$/i.test(effectiveUserId)) {
       setVendorError("Invalid User ID format");
-      setVendorStatusMsg("Invalid user id");
       toast({
         title: "⚠️ Invalid User ID Format",
         description: "User ID must be a 24-char hex ObjectId.",
@@ -94,7 +115,6 @@ const AIAssistant: React.FC = () => {
 
     setIsLoadingVendors(true);
     setVendorError("");
-    setVendorStatusMsg("Loading vendors...");
 
     try {
       const { data, response } = await api.getVendors(effectiveUserId);
@@ -110,11 +130,8 @@ const AIAssistant: React.FC = () => {
       vendorsLoadedRef.current = true;
       console.log("[AIAssistant] vendors stored in state count=", incoming.length, incoming);
 
-      if (data.total > 0) {
-        setVendorStatusMsg(`Loaded ${data.total} vendor${data.total === 1 ? '' : 's'}`);
-      } else {
+      if (data.total === 0) {
         setVendorError("No vendor folders found");
-        setVendorStatusMsg("No vendors found");
         toast({
           description: "Sync emails first to create vendor folders.",
           variant: "destructive",
@@ -124,7 +141,6 @@ const AIAssistant: React.FC = () => {
       console.error("[AIAssistant] vendor load error", e);
       const errMsg = e.message || "Failed to load vendors";
       setVendorError(errMsg);
-      setVendorStatusMsg("Load failed");
       vendorsLoadedRef.current = false;
       toast({
         title: "⚠️ Unable to Load Vendors",
@@ -142,40 +158,6 @@ const AIAssistant: React.FC = () => {
       loadVendors();
     }
   }, [user?.id, loadVendors]);
-
-  useEffect(() => {
-    if (selectedVendorName === 'ALL') {
-      setVendorReady(true);
-      setVendorStatusMsg('Querying across all vendors');
-    }
-  }, [selectedVendorName]);
-
-  useEffect(() => {
-    if (!selectedVendorName || selectedVendorName === 'ALL') return;
-    let timer: any;
-    const poll = async () => {
-      try {
-        const { data } = await getChatVendorSummary(selectedVendorName);
-        console.log("[AIAssistant] vendor summary poll", selectedVendorName, data);
-        const chunks = data.vendor_info?.total_chunks || 0;
-        if (chunks > 0) {
-          setVendorReady(true);
-          setVendorStatusMsg(`Knowledge ready (${chunks} chunks)`);
-          return;
-        } else {
-          setVendorReady(false);
-          setVendorStatusMsg("Indexing knowledge...");
-        }
-      } catch {
-        setVendorReady(false);
-        setVendorStatusMsg("Waiting for indexing...");
-        console.warn("[AIAssistant] vendor summary poll failed for", selectedVendorName);
-      }
-      timer = setTimeout(poll, 5000);
-    };
-    poll();
-    return () => timer && clearTimeout(timer);
-  }, [selectedVendorName]);
 
   const formatTime = () =>
     new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -199,8 +181,10 @@ const AIAssistant: React.FC = () => {
 
     try {
       const effectiveUserId = resolveUserId();
+      // If vendor is selected and not 'ALL', pass it; otherwise let backend search all user's data
       const vendorToQuery = selectedVendorName && selectedVendorName !== 'ALL' ? selectedVendorName : undefined;
       const { data, response } = await getChatAnswer(value, vendorToQuery, effectiveUserId);
+      
       if (!response.ok || data.success === false) {
         pushMessage({ sender: "error", text: data.message || `Error: HTTP ${response.status}` });
       } else {
@@ -317,6 +301,13 @@ const AIAssistant: React.FC = () => {
     setShowVendorDropdown(!showVendorDropdown);
   };
 
+  const handleVendorSelect = (vendorId: string, vendorName: string) => {
+    setSelectedVendorId(vendorId);
+    setSelectedVendorName(vendorName);
+    setShowVendorDropdown(false);
+    // No API call here - just set the selection. Backend will handle filtering when user asks a question.
+  };
+
   return (
     <div className="flex flex-col h-[calc(100vh-100px)] bg-background text-foreground">
       <header className="flex items-center justify-between px-6 py-3 shadow-md flex-none">
@@ -386,7 +377,16 @@ const AIAssistant: React.FC = () => {
                 Ask questions about your vendors, invoices, and analytics
               </p>
               
-              {selectedVendorName && vendorReady && (
+              {/* Show sync warning if no indexed data */}
+              {hasIndexedData === false && (
+                <div className="mb-6 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+                  <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                    ⚠️ No indexed data found. Please sync your emails and process documents first.
+                  </p>
+                </div>
+              )}
+              
+              {hasIndexedData && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
                   {[
                     "Show invoice totals trend",
@@ -405,9 +405,9 @@ const AIAssistant: React.FC = () => {
                 </div>
               )}
               
-              {!selectedVendorName && vendors.length > 0 && (
-                <p className="text-sm text-muted-foreground">
-                  Select a vendor below to start chatting or begin without selecting a vendor.
+              {!selectedVendorName && vendors.length > 0 && hasIndexedData && (
+                <p className="text-sm text-muted-foreground mt-4">
+                  Select a vendor below to filter, or ask questions across all vendors.
                 </p>
               )}
             </div>
@@ -503,7 +503,7 @@ const AIAssistant: React.FC = () => {
                   title={selectedVendorName || "Select vendor"}
                 >
                   <span className="max-w-[120px] truncate">
-                    {isLoadingVendors ? "Loading..." : (selectedVendorName || "Vendor")}
+                    {isLoadingVendors ? "Loading..." : (selectedVendorName || "Select Vendors")}
                   </span>
                   <FiChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                 </button>
@@ -531,34 +531,20 @@ const AIAssistant: React.FC = () => {
                         </div>
                       ) : (
                         <>
-                          {vendors.length > 1 && (
-                            <button
-                              onClick={() => {
-                                setSelectedVendorId('ALL');
-                                setSelectedVendorName('ALL');
-                                setVendorReady(true);
-                                setVendorStatusMsg('Querying across all vendors');
-                                setShowVendorDropdown(false);
-                              }}
-                              className={`w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition-colors ${
-                                selectedVendorName === 'ALL' ? 'bg-primary text-primary-foreground' : ''
-                              }`}
-                            >
-                              All Vendors
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleVendorSelect('', '')}
+                            className={`w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition-colors ${
+                              !selectedVendorName ? 'bg-primary text-primary-foreground' : ''
+                            }`}
+                          >
+                            Select
+                          </button>
                           {vendors.map(v => (
                             <button
                               key={v.id}
-                              onClick={() => {
-                                setSelectedVendorId(v.id);
-                                setSelectedVendorName(v.name);
-                                setVendorReady(false);
-                                setVendorStatusMsg('Checking vendor knowledge...');
-                                setShowVendorDropdown(false);
-                              }}
+                              onClick={() => handleVendorSelect(v.id, v.name)}
                               className={`w-full text-left px-3 py-2 rounded-md text-sm hover:bg-muted transition-colors ${
-                                selectedVendorId === v.id && selectedVendorName !== 'ALL' ? 'bg-primary text-primary-foreground' : ''
+                                selectedVendorId === v.id ? 'bg-primary text-primary-foreground' : ''
                               }`}
                             >
                               {v.name}
@@ -582,7 +568,7 @@ const AIAssistant: React.FC = () => {
                   }
                 }}
                 rows={1}
-                placeholder="Ask anything about your vendors and invoices..."
+                placeholder={selectedVendorName ? `Ask about ${selectedVendorName}...` : "Ask anything about your vendors and invoices..."}
                 className="flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground max-h-[200px]"
               />
 
@@ -596,13 +582,6 @@ const AIAssistant: React.FC = () => {
                 <FiSend className="h-4 w-4" />
               </button>
             </div>
-
-            {selectedVendorName && !vendorReady && (
-              <div className="px-4 pb-2 text-xs text-muted-foreground flex items-center gap-2">
-                <span className="inline-flex h-2 w-2 rounded-full bg-primary animate-pulse" />
-                Indexing {selectedVendorName}...
-              </div>
-            )}
           </div>
           
           <p className="mt-2 text-center text-xs text-muted-foreground">
