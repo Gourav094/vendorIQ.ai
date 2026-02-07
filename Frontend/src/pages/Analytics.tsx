@@ -2,7 +2,7 @@ import { useState, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnalyticsChart } from "@/components/AnalyticsChart";
 import { DashboardMetricCard } from "@/components/ui/DashboardMetricCard";
-import { TrendingUp, TrendingDown, Calendar, IndianRupee, BarChart3, LucideIcon, Mail, ExternalLink, RefreshCw } from "lucide-react";
+import { TrendingUp, Calendar, IndianRupee, BarChart3, LucideIcon, RefreshCw, FileText, Upload, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -12,6 +12,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAnalytics } from "@/hooks/use-analytics";
+import { syncChatDocuments } from "@/services/api";
+import { useNavigate } from "react-router-dom";
 
 interface Insight {
   title: string;
@@ -24,10 +26,13 @@ interface Insight {
 export default function Analytics() {
   const [period, setPeriod] = useState("year");
   const [expandedVendors, setExpandedVendors] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   // Use React Query hook for analytics data
-  const { data: analytics, isLoading, isError, error, isFetching, dataUpdatedAt } = useAnalytics(period);
+  const { data: analytics, isLoading, isError, error, isFetching, dataUpdatedAt, refetch } = useAnalytics(period);
 
   // Memoized insight cards
   const insights: Insight[] = useMemo(() => {
@@ -76,9 +81,42 @@ export default function Analytics() {
     ];
   }, [analytics]);
 
-  // Handle manual sync
-  const handleSync = () => {
-    queryClient.invalidateQueries({ queryKey: ["analytics", period] });
+  // Handle refresh (refetch analytics directly)
+  const handleRefresh = async () => {
+    setSyncMessage(null);
+    await refetch();
+  };
+
+  // Handle sync (index documents then refresh)
+  const handleSync = async () => {
+    const userId = localStorage.getItem("userId");
+    console.log("Sync - userId from localStorage:", userId);
+    
+    if (!userId) {
+      setSyncMessage("User ID not found. Please log in again.");
+      return;
+    }
+
+    setIsSyncing(true);
+    setSyncMessage(null);
+
+    try {
+      const { data, response } = await syncChatDocuments(userId);
+      console.log("Sync response:", { data, status: response.status });
+      
+      if (response.ok && data.success) {
+        setSyncMessage(`✓ ${data.message}`);
+        // Refresh analytics after successful sync
+        await refetch();
+      } else {
+        setSyncMessage(data.message || "Sync completed but no new documents found");
+      }
+    } catch (err) {
+      console.error("Sync error:", err);
+      setSyncMessage(`Failed to sync: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Format last sync time
@@ -94,69 +132,126 @@ export default function Analytics() {
     return new Date(timestamp).toLocaleDateString();
   };
 
+  // Loading state
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] w-full">
         <div className="flex flex-col items-center gap-6">
-          <div className="h-16 w-16 rounded-full border-4 border-t-transparent animate-spin mb-4" style={{ borderColor: '#e5e7eb' }} />
-          <h2 className="text-2xl font-bold text-muted-foreground">
-            Loading your analytics data...
+          <div className="h-16 w-16 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+          <h2 className="text-2xl font-semibold text-foreground">
+            Loading Analytics
           </h2>
-          <p className="text-lg text-muted-foreground text-center max-w-xl">
-            This may take a few moments if you have a large number of invoices or vendors. Please wait while we gather your insights.
+          <p className="text-muted-foreground text-center max-w-md">
+            Fetching your spend insights and trends...
           </p>
         </div>
       </div>
     );
   }
 
+  // Error state
   if (isError) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] w-full">
-        <div className="flex flex-col items-center gap-6">
-          <h2 className="text-2xl font-bold text-muted-foreground">No analytics data available</h2>
-          <p className="text-lg text-muted-foreground text-center max-w-xl">
-            We couldn't find any analytics for your connected account yet.<br />
-            Please sync your mail or connect your Gmail account.<br />
-            Go to <strong>Settings</strong> to check the status and sync your data.
+      <div className="flex flex-col items-center justify-center min-h-[60vh] w-full px-4">
+        <div className="flex flex-col items-center gap-6 max-w-lg text-center">
+          <div className="h-20 w-20 rounded-full bg-destructive/10 flex items-center justify-center">
+            <AlertCircle className="h-10 w-10 text-destructive" />
+          </div>
+          <h2 className="text-2xl font-semibold text-foreground">
+            Unable to Load Analytics
+          </h2>
+          <p className="text-muted-foreground">
+            {error instanceof Error ? error.message : "Something went wrong while fetching your analytics."}
           </p>
-          {/* <div className="bg-blue-50 border border-blue-200 rounded p-3 text-blue-800 text-sm max-w-md">
-            <strong>Tip:</strong> After connecting your email, make sure to sync to see your latest analytics. If you face issues, retry syncing or check your connection status in Settings.
-          </div> */}
-          <Button onClick={handleSync} variant="outline" size="lg">
+          <Button onClick={handleRefresh} variant="default" size="lg">
             <RefreshCw className="h-4 w-4 mr-2" />
-            Retry
+            Try Again
           </Button>
         </div>
       </div>
     );
   }
 
+  // No data available state
   if (!analytics) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] w-full">
-        <div className="flex flex-col items-center gap-6">
-          <h2 className="text-2xl font-bold text-muted-foreground">No analytics data available</h2>
-          <p className="text-lg text-muted-foreground text-center max-w-xl">
-            We couldn't find any analytics for your connected account yet.<br />
-            Please sync your mail or connect your <Mail className="inline w-5 h-5 align-text-bottom text-red-500" aria-label="Gmail" /> account.<br />
-            <Button onClick={() => window.location.href = '/settings'} variant="outline" size="lg">
-              <Mail className="h-4 w-4 mr-2 text-red-500" />
-              <ExternalLink className="h-4 w-4 mr-2" />
+      <div className="flex flex-col items-center justify-center min-h-[60vh] w-full my-4 px-4">
+        <div className="flex flex-col items-center gap-6 max-w-xl text-center">
+          {/* Icon */}
+          <div className="h-20 w-20 rounded-full bg-muted flex items-center justify-center">
+            <FileText className="h-10 w-10 text-muted-foreground" />
+          </div>
+
+          {/* Title */}
+          <h2 className="text-2xl font-semibold text-foreground">
+            No Analytics Data Available
+          </h2>
+
+          {/* Description */}
+          <div className="space-y-3 text-muted-foreground">
+            <p>
+              We couldn't find any indexed invoice data for your account.
+            </p>
+            <p className="text-sm">
+              To see analytics, you need to:
+            </p>
+            <ol className="text-sm text-left list-decimal list-inside space-y-2 bg-muted/50 rounded-lg p-4">
+              <li><strong>Connect Gmail</strong> — Go to Settings and connect your Google account</li>
+              <li><strong>Fetch Emails</strong> — Sync your invoice emails from Gmail</li>
+              <li><strong>Process Documents</strong> — Let OCR extract invoice data</li>
+              <li><strong>Index Documents</strong> — Click "Sync" in processing status </li>
+            </ol>
+          </div>
+
+          {/* Sync message */}
+          {syncMessage && (
+            <div className={`text-sm px-4 py-2 rounded-md ${
+              syncMessage.startsWith("✓") 
+                ? "bg-green-50 text-green-700 border border-green-200" 
+                : "bg-amber-50 text-amber-700 border border-amber-200"
+            }`}>
+              {syncMessage}
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex flex-col sm:flex-row gap-3 mt-2">
+            <Button 
+              onClick={handleRefresh} 
+              variant="outline" 
+              size="lg"
+              disabled={isFetching}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
+              {isFetching ? "Refreshing..." : "Refresh"}
+            </Button>
+            
+            <Button 
+              onClick={handleSync} 
+              variant="default" 
+              size="lg"
+              disabled={isSyncing}
+            >
+              <Upload className={`h-4 w-4 mr-2 ${isSyncing ? 'animate-pulse' : ''}`} />
+              {isSyncing ? "Syncing..." : "Sync Documents"}
+            </Button>
+
+            <Button 
+              onClick={() => navigate("/settings")} 
+              variant="secondary" 
+              size="lg"
+            >
               Go to Settings
             </Button>
-            to check the status and sync your data.
+          </div>
+
+          {/* Help text */}
+          <p className="text-xs text-muted-foreground mt-4">
+            If you've already processed invoices, click "Sync Documents" to index them for analytics.
           </p>
-          {/* <div className="bg-blue-50 border border-blue-200 rounded p-3 text-blue-800 text-sm max-w-md">
-            <strong>Tip:</strong> After connecting your email, make sure to sync to see your latest analytics. If you face issues, retry syncing or check your connection status in Settings.
-          </div> */}
         </div>
       </div>
     );
-  }
-
-  if (analytics.success === false) {
-    return <p className="text-sm text-red-600">{analytics.message || "Analytics unavailable"}</p>;
   }
 
   return (
@@ -176,16 +271,16 @@ export default function Analytics() {
               </p>
             )}
           </div>
-          <div className="flex gap-2  ">
+          <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={handleSync}
+              onClick={handleRefresh}
               disabled={isFetching}
               className="flex items-center gap-2"
             >
               <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
-              {isFetching ? "Syncing..." : "Sync"}
+              {isFetching ? "Syncing..." : "Refresh"}
             </Button>
             <Select value={period} onValueChange={(val) => setPeriod(val)}>
               <SelectTrigger className="w-[180px]" data-testid="select-time-period">
@@ -199,7 +294,6 @@ export default function Analytics() {
               </SelectContent>
             </Select>
           </div>
-
         </div>
         {analytics.llmSummary && (
           <div className="mt-3 text-sm leading-relaxed bg-muted/40 p-3 rounded-lg border">
@@ -226,7 +320,7 @@ export default function Analytics() {
         <AnalyticsChart title="Quarterly Growth" type="bar" data={analytics.quarterlyTrend || []} />
       </div>
 
-      {/* Responsive overflow table for long vendor list */}
+      {/* Vendor table */}
       {analytics.topVendors?.length > 0 ? (
         <div className="bg-card border rounded-md p-4">
           <h3 className="text-lg font-semibold mb-3">Vendor Spend (All)</h3>
@@ -244,7 +338,7 @@ export default function Analytics() {
                   <tr key={v.name} className="border-b last:border-0">
                     <td className="py-2 pr-4 max-w-[180px] truncate" title={v.name}>{v.name}</td>
                     <td className="py-2 pr-4 whitespace-nowrap">₹{v.value.toLocaleString()}</td>
-                    <td className="py-2 pr-4 whitespace-nowrap">{/* invoice count unknown in this list */}</td>
+                    <td className="py-2 pr-4 whitespace-nowrap"></td>
                   </tr>
                 ))}
               </tbody>

@@ -2,21 +2,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import chat
 import uvicorn
-from app.routes.graphql import graphql_router
-
 
 app = FastAPI(
     title="VendorIQ Chat Service",
     description=(
         "### Overview\n"
-        "This service provides both **REST** and **GraphQL** APIs.\n\n"
-        "**REST Endpoints**\n"
-        "- Manage user messages, chat sessions, and system health.\n\n"
-        "**GraphQL Endpoint**\n"
-        "- **URL:** `/graphql`\n"
-        "- Supports queries and mutations for chat interactions.\n"
+        "Chat service with RAG-based Q&A, document syncing, and analytics.\n\n"
+        "**Core Endpoints:**\n"
+        "- POST /api/v1/sync - Index OCR-processed documents\n"
+        "- POST /api/v1/query - Ask questions with RAG\n"
+        "- GET /api/v1/analytics - Get spend analytics\n"
+        "- DELETE /api/v1/user/{user_id}/data - Delete user's data\n"
+        "- GET /api/v1/stats - Get indexing stats\n"
+        "- GET /api/v1/health - Health check\n"
     ),
-    version="1.1.0",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -29,13 +29,15 @@ app.add_middleware(
 
 # Include REST router
 app.include_router(chat.router, prefix="/api/v1")
-# Include GraphQL router (no /api prefix to follow common convention)
-app.include_router(graphql_router, prefix="/graphql")
 
 @app.get("/", tags=["Root"])
 async def root():
-    return {"message": "Welcome to VendorIQ Chat Service 🚀", "docs": "/docs", "health": "/api/v1/health"}
-
+    return {
+        "message": "Welcome to VendorIQ Chat Service",
+        "version": "2.0.0",
+        "docs": "/docs",
+        "health": "/api/v1/health"
+    }
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=4005, reload=True)

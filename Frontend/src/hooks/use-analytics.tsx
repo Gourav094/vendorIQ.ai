@@ -21,30 +21,61 @@ interface AnalyticsApiResponse {
   llmSummary?: string;
 }
 
-const CHAT_BASE = (import.meta as any).env?.VITE_CHAT_BASE_URL || "http://localhost:4005";
+// Use API Gateway instead of direct service call
+const API_GATEWAY_URL = (import.meta as any).env?.VITE_API_GATEWAY_URL || "http://localhost:4000";
 
-const fetchAnalytics = async (period: string): Promise<AnalyticsApiResponse> => {
+const fetchAnalytics = async (period: string): Promise<AnalyticsApiResponse | null> => {
   const userId = localStorage.getItem("userId");
-  const url = userId 
-    ? `${CHAT_BASE}/api/v1/analytics?period=${period}&userId=${userId}` 
-    : `${CHAT_BASE}/api/v1/analytics?period=${period}`;
   
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error("Failed to fetch analytics");
+  // userId is REQUIRED by the backend - but don't throw, return null
+  if (!userId) {
+    console.warn("Analytics: No userId found in localStorage");
+    return null;
   }
   
-  return res.json();
+  const url = `${API_GATEWAY_URL}/chat/api/v1/analytics?period=${period}&userId=${userId}`;
+  console.log("Fetching analytics:", url);
+  
+  const res = await fetch(url, {
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+  
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    console.log("Analytics API error:", res.status, errorData);
+    
+    // If no data available, return null instead of throwing
+    if (res.status === 400 && (errorData.detail?.includes("No spend data") || errorData.detail?.includes("No spend"))) {
+      return null;
+    }
+    throw new Error(errorData.detail || errorData.message || "Failed to fetch analytics");
+  }
+  
+  const data = await res.json();
+  console.log("Analytics data received:", data.success, "invoices:", data.insights?.totalInvoices);
+  
+  // Check if data has actual content
+  if (!data.success || !data.insights || data.insights.totalInvoices === 0) {
+    return null;
+  }
+  
+  return data;
 };
 
 export const useAnalytics = (period: string = "year") => {
+  const userId = localStorage.getItem("userId");
+  
   return useQuery({
-    queryKey: ["analytics", period],
+    queryKey: ["analytics", period, userId],
     queryFn: () => fetchAnalytics(period),
     staleTime: 15 * 60 * 1000, // Data is fresh for 15 minutes
-    gcTime: 30 * 60 * 1000, // Cache persists for 30 minutes (formerly cacheTime)
-    retry: 2,
-    refetchOnWindowFocus: false, // Don't refetch when user switches tabs
-    refetchOnReconnect: true, // Refetch when internet reconnects
+    gcTime: 30 * 60 * 1000, // Cache persists for 30 minutes
+    retry: 1, // Only retry once
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    enabled: !!userId, // Only fetch if userId exists
   });
 };
