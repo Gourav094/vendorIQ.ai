@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -88,29 +89,67 @@ async def _run_invoice_ocr(filename: str, content: bytes) -> Optional[Dict]:
     return None
 
 
-def _load_master(path: str) -> List[Dict]:
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                return json.load(handle)
-        except json.JSONDecodeError:
-            logger.warning("Existing master.json invalid JSON", extra={"path": path})
-    return []
-
-
-def _write_master(path: str, payload: List[Dict]) -> None:
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=4)
+async def _download_master_from_drive(folder_id: str, refresh_token: str) -> List[Dict]:
+    """Download existing master.json from Drive. Returns empty list if not found."""
+    if not folder_id:
+        logger.info("No folder_id provided, starting with empty master")
+        return []
+    
+    logger.info(f"Attempting to download master.json from Drive folder: {folder_id}")
+    
+    creds = _build_credentials(DRIVE_SCOPES, refresh_token)
+    if not creds:
+        logger.error("Failed to build credentials for Drive access")
+        return []
+    
+    service = build("drive", "v3", credentials=creds)
+    
+    # Search for master.json in the folder
+    query = f"'{folder_id}' in parents and name='master.json' and trashed=false"
+    try:
+        result = service.files().list(q=query, fields="files(id)").execute()
+        files = result.get("files", [])
+        
+        if not files:
+            logger.info("No existing master.json found in Drive, starting fresh")
+            return []
+        
+        # Download the file
+        file_id = files[0]["id"]
+        logger.info(f"Found master.json (file_id: {file_id}), downloading...")
+        
+        request = service.files().get_media(fileId=file_id)
+        
+        import io
+        file_buffer = io.BytesIO()
+        from googleapiclient.http import MediaIoBaseDownload
+        downloader = MediaIoBaseDownload(file_buffer, request)
+        
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+        
+        file_buffer.seek(0)
+        master_data = json.load(file_buffer)
+        logger.info(f"Downloaded master.json successfully ({len(master_data)} existing records)")
+        return master_data if isinstance(master_data, list) else []
+        
+    except Exception as exc:
+        logger.warning(f"Failed to download master.json from Drive: {str(exc)[:100]}")
+        return []
 
 
 async def _upload_master_to_drive(folder_id: str, local_path: str, refresh_token: str) -> Optional[str]:
     """Upload master.json to Drive and return the Drive path."""
     if not folder_id:
-        logger.info("No Drive folder provided for master.json upload")
+        logger.info("No Drive folder provided, skipping upload")
         return None
 
+    logger.info(f"Uploading master.json to Drive folder: {folder_id}")
+    
     creds = _build_credentials(DRIVE_SCOPES, refresh_token)
     if not creds:
+        logger.error("Failed to build credentials for Drive upload")
         return None
 
     service = build("drive", "v3", credentials=creds)
@@ -119,20 +158,23 @@ async def _upload_master_to_drive(folder_id: str, local_path: str, refresh_token
     query = f"'{folder_id}' in parents and name='master.json' and trashed=false"
     try:
         result = service.files().list(q=query, fields="files(id)").execute()
-        for item in result.get("files", []):
-            service.files().delete(fileId=item["id"]).execute()
+        existing_files = result.get("files", [])
+        if existing_files:
+            logger.info(f"Removing {len(existing_files)} existing master.json file(s)")
+            for item in existing_files:
+                service.files().delete(fileId=item["id"]).execute()
     except Exception as exc:
-        logger.error("Failed to remove existing master.json", exc_info=exc, extra={"folder_id": folder_id})
+        logger.error(f"Failed to remove existing master.json: {str(exc)[:100]}")
 
     metadata = {"name": "master.json", "parents": [folder_id]}
     media = MediaFileUpload(local_path, mimetype="application/json")
 
     try:
         uploaded = service.files().create(body=metadata, media_body=media, fields="id").execute()
-        logger.info("Uploaded master.json to Drive", extra={"folder_id": folder_id})
+        logger.info(f"Uploaded master.json successfully (file_id: {uploaded.get('id')})")
         return f"{folder_id}/master.json"
     except Exception as exc:
-        logger.error("Failed to upload master.json", exc_info=exc, extra={"folder_id": folder_id})
+        logger.error(f"Failed to upload master.json: {str(exc)[:100]}")
         return None
 
 
@@ -145,23 +187,21 @@ async def process_vendor_invoices(
     vendor_folder_id: Optional[str] = None,
 ) -> Dict:
     """
-    Process invoices for a vendor:
-    1. Check DB for document status (ocrStatus)
-    2. Only process if status is PENDING or FAILED
-    3. Download PDF from Drive using drive_file_id
-    4. Run OCR extraction
-    5. Write to master.json (local + Drive)
-    6. Update MongoDB with ocr_status=COMPLETED
+    Stateless OCR processing:
+    1. Download existing master.json from Drive (or start fresh)
+    2. Process new invoices and append to master data
+    3. Upload updated master.json to Drive
+    4. Delete temporary files (no persistent cache)
     
-    Database = source of truth for what needs processing
-    Google Drive = source of truth for files
-    Local storage = temporary cache only
+    Google Drive = single source of truth
+    MongoDB = processing status tracking
+    Local storage = temporary only (deleted after upload)
     """
+    logger.info(f"[OCR] Starting processing for vendor: {vendor_name} (user: {user_id})")
+    logger.info(f"[OCR] Total invoices to check: {len(invoices)}")
+    
     if not refresh_token:
-        logger.error(
-            "Refresh token required for vendor processing",
-            extra={"user_id": user_id, "vendor": vendor_name},
-        )
+        logger.error(f"[OCR] Missing refresh token for user: {user_id}")
         return {
             "userId": user_id,
             "vendorName": vendor_name,
@@ -172,15 +212,11 @@ async def process_vendor_invoices(
     
     from app.db import get_db
     
-    _ensure_folder(INVOICES_ROOT)
-
-    folder_key = invoice_folder_id or vendor_folder_id or vendor_name or "default"
-    local_folder = os.path.join(INVOICES_ROOT, folder_key)
-    _ensure_folder(local_folder)
-
-    master_path = os.path.join(local_folder, "master.json")
-    master_records = _load_master(master_path)
+    # Step 1: Download existing master.json from Drive (stateless!)
+    master_records = await _download_master_from_drive(invoice_folder_id, refresh_token)
     master_index = {str(entry.get("drive_file_id")): entry for entry in master_records if entry.get("drive_file_id")}
+    
+    logger.info(f"[OCR] Loaded {len(master_records)} existing records from Drive")
 
     processed, skipped = [], []
 
@@ -196,10 +232,12 @@ async def process_vendor_invoices(
         web_content_link = invoice.get("webContentLink") or invoice.get("web_content_link")
 
         if not file_id or not file_name:
+            logger.debug("[OCR] Skipping invoice with missing identifiers")
             skipped.append({"reason": "missing identifiers", "invoice": invoice})
             continue
 
         if mime_type and mime_type != "application/pdf":
+            logger.debug(f"[OCR] Skipping non-PDF file: {file_name} ({mime_type})")
             skipped.append({"reason": "unsupported mime", "invoice": invoice})
             continue
 
@@ -212,43 +250,38 @@ async def process_vendor_invoices(
         if doc_in_db:
             ocr_status = doc_in_db.get("ocrStatus", "PENDING")
             
-            # Skip if already completed
             if ocr_status == "COMPLETED":
+                logger.debug(f"[OCR] Skipping completed: {file_name}")
                 skipped.append({"reason": "already completed (DB)", "invoice": invoice, "file_id": file_id})
                 continue
             
-            # Skip if currently processing (avoid duplicate processing)
             if ocr_status == "PROCESSING":
+                logger.debug(f"[OCR] Skipping in-progress: {file_name}")
                 skipped.append({"reason": "already processing", "invoice": invoice, "file_id": file_id})
                 continue
             
-            # Process if PENDING or FAILED
-            logger.info(f"Processing document with status {ocr_status}", extra={
-                "file_id": file_id,
-                "file_name": file_name,
-                "status": ocr_status
-            })
+            logger.info(f"[OCR] Processing: {file_name} (status: {ocr_status})")
         else:
-            # Document not in DB yet - this shouldn't happen in normal flow
-            logger.warning(f"Document not found in DB, will process anyway", extra={
-                "file_id": file_id,
-                "user_id": user_id
-            })
+            logger.warning(f"[OCR] Document not in DB, processing anyway: {file_name}")
 
         # Update MongoDB: OCR processing started
         update_ocr_status(user_id, file_id, "PROCESSING")
 
-        # Always download from Drive - we don't cache PDFs locally
+        # Download PDF from Drive
+        logger.debug(f"[OCR] Downloading PDF from Drive: {file_name}")
         pdf_bytes = await _download_pdf(file_id, refresh_token)
         if not pdf_bytes:
+            logger.error(f"[OCR] Download failed: {file_name}")
             update_ocr_status(user_id, file_id, "FAILED", ocr_error="Failed to download PDF from Drive")
             skipped.append({"reason": "download failed", "invoice": invoice, "file_id": file_id})
             continue
 
         # Run OCR
+        logger.info(f"[OCR] Running OCR extraction on: {file_name}")
         ocr_payload = await _run_invoice_ocr(file_name, pdf_bytes)
         if not ocr_payload or "error" in ocr_payload:
             error_msg = ocr_payload.get("error") if ocr_payload else "OCR extraction failed"
+            logger.error(f"[OCR] Extraction failed for {file_name}: {error_msg}")
             update_ocr_status(user_id, file_id, "FAILED", ocr_error=error_msg)
             skipped.append({"reason": "ocr failed", "invoice": invoice, "file_id": file_id, "error": error_msg})
             continue
@@ -266,43 +299,50 @@ async def process_vendor_invoices(
         if web_content_link:
             enriched["web_content_link"] = web_content_link
 
+        # Append to in-memory master data
         master_records.append(enriched)
         master_index[file_id] = enriched
-
-        # Write individual invoice JSON
-        with open(os.path.join(local_folder, f"{file_id}.json"), "w", encoding="utf-8") as handle:
-            json.dump(enriched, handle, indent=4)
-
         processed.append(file_id)
+        logger.info(f"[OCR] Completed: {file_name}")
 
-    # Write master.json locally
-    _write_master(master_path, master_records)
-
-    # Upload master.json to Drive and get path
+    # Step 2: Upload updated master.json to Drive (using temporary file)
     master_json_path = None
     if processed:
-        master_json_path = await _upload_master_to_drive(invoice_folder_id, master_path, refresh_token)
+        logger.info(f"[OCR] Creating temporary master.json with {len(master_records)} total records")
+        
+        # Create a temporary file for upload
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8') as temp_file:
+            json.dump(master_records, temp_file, indent=4)
+            temp_path = temp_file.name
+        
+        logger.debug(f"[OCR] Temp file created: {temp_path}")
+        
+        try:
+            master_json_path = await _upload_master_to_drive(invoice_folder_id, temp_path, refresh_token)
+            
+            # Step 3: Delete temporary file immediately after upload
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+                logger.debug(f"[OCR] Deleted temporary file: {temp_path}")
+        except Exception as e:
+            logger.error(f"[OCR] Upload/cleanup failed: {str(e)[:100]}")
+            # Clean up temp file even on failure
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
-    # Update MongoDB for all processed invoices: ocr_status=COMPLETED, indexed=false
-    for file_id in processed:
-        update_ocr_status(
-            user_id=user_id,
-            drive_file_id=file_id,
-            ocr_status="COMPLETED",
-            master_json_path=master_json_path,
-        )
-
+    # Update MongoDB for all processed invoices
     if processed:
-        logger.info(
-            "Processed invoices (OCR complete, pending indexing)",
-            extra={"vendor": vendor_name, "processed": len(processed), "skipped": len(skipped)},
-        )
-    else:
-        logger.info(
-            "No new invoices to process",
-            extra={"vendor": vendor_name, "skipped": len(skipped)},
-        )
+        logger.info(f"[OCR] Updating MongoDB status for {len(processed)} documents")
+        for file_id in processed:
+            update_ocr_status(
+                user_id=user_id,
+                drive_file_id=file_id,
+                ocr_status="COMPLETED",
+                master_json_path=master_json_path,
+            )
 
+    logger.info(f"[OCR] Complete for {vendor_name}: {len(processed)} processed, {len(skipped)} skipped")
+    
     return {
         "userId": user_id,
         "vendorName": vendor_name,
