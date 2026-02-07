@@ -14,6 +14,8 @@ import {
 import { useAnalytics } from "@/hooks/use-analytics";
 import { syncChatDocuments } from "@/services/api";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 
 interface Insight {
   title: string;
@@ -30,6 +32,8 @@ export default function Analytics() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { toast } = useToast();
 
   // Use React Query hook for analytics data
   const { data: analytics, isLoading, isError, error, isFetching, dataUpdatedAt, refetch } = useAnalytics(period);
@@ -37,26 +41,26 @@ export default function Analytics() {
   // Memoized insight cards
   const insights: Insight[] = useMemo(() => {
     const data = analytics;
-    if (!data || data.success === false) {
+    if (!data || data.success === false || !data.insights) {
       return [];
     }
     return [
       {
         title: "Highest Spend",
-        value: `₹${data.insights.highestSpend.amount.toLocaleString()}`,
+        value: `₹${(data.insights.highestSpend?.amount || 0).toLocaleString()}`,
         icon: TrendingUp,
-        change: data.insights.highestSpend.vendor,
+        change: data.insights.highestSpend?.vendor || "N/A",
         changeType: "neutral",
       },
       {
         title: "Average Invoice",
-        value: `₹${data.insights.averageInvoice.toLocaleString()}`,
+        value: `₹${(data.insights.averageInvoice || 0).toLocaleString()}`,
         icon: IndianRupee,
         changeType: "positive",
       },
       {
         title: "Avg Payment Time",
-        value: `${data.insights.avgPaymentTime.toFixed(0)} days`,
+        value: `${(data.insights.avgPaymentTime || 0).toFixed(0)} days`,
         icon: Calendar,
         changeType: "positive",
       },
@@ -83,17 +87,17 @@ export default function Analytics() {
 
   // Handle refresh (refetch analytics directly)
   const handleRefresh = async () => {
-    setSyncMessage(null);
+    if (!user?.id) {
+      toast({ title: "Login Required", description: "Please log in to view analytics", variant: "destructive" });
+      return;
+    }
     await refetch();
   };
 
   // Handle sync (index documents then refresh)
   const handleSync = async () => {
-    const userId = localStorage.getItem("userId");
-    console.log("Sync - userId from localStorage:", userId);
-    
-    if (!userId) {
-      setSyncMessage("User ID not found. Please log in again.");
+    if (!user?.id) {
+      toast({ title: "Login Required", description: "Please log in to sync documents", variant: "destructive" });
       return;
     }
 
@@ -101,19 +105,18 @@ export default function Analytics() {
     setSyncMessage(null);
 
     try {
-      const { data, response } = await syncChatDocuments(userId);
+      const { data, response } = await syncChatDocuments(user.id);
       console.log("Sync response:", { data, status: response.status });
       
       if (response.ok && data.success) {
-        setSyncMessage(`✓ ${data.message}`);
+        toast({ title: "✓ Sync Complete", description: data.message || "Documents synced successfully" });
         // Refresh analytics after successful sync
         await refetch();
       } else {
-        setSyncMessage(data.message || "Sync completed but no new documents found");
+        toast({ title: "Sync Info", description: data.message || "No new documents to sync" });
       }
     } catch (err) {
-      console.error("Sync error:", err);
-      setSyncMessage(`Failed to sync: ${err instanceof Error ? err.message : "Unknown error"}`);
+      toast({ title: "Sync Failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
     } finally {
       setIsSyncing(false);
     }
@@ -132,18 +135,56 @@ export default function Analytics() {
     return new Date(timestamp).toLocaleDateString();
   };
 
-  // Loading state
+  // Loading state - Skeleton loader
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] w-full">
-        <div className="flex flex-col items-center gap-6">
-          <div className="h-16 w-16 rounded-full border-4 border-primary border-t-transparent animate-spin" />
-          <h2 className="text-2xl font-semibold text-foreground">
-            Loading Analytics
-          </h2>
-          <p className="text-muted-foreground text-center max-w-md">
-            Fetching your spend insights and trends...
-          </p>
+      <div className="space-y-8 max-w-full overflow-x-hidden m-2 py-2 md:px-4 animate-pulse">
+        {/* Header Skeleton */}
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-row items-center justify-between">
+            <div className="space-y-2">
+              <div className="h-10 w-48 bg-muted rounded-md" />
+              <div className="h-4 w-64 bg-muted rounded-md" />
+            </div>
+            <div className="flex gap-2">
+              <div className="h-9 w-24 bg-muted rounded-md" />
+              <div className="h-9 w-[180px] bg-muted rounded-md" />
+            </div>
+          </div>
+        </div>
+
+        {/* Metric Cards Skeleton */}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div key={i} className="bg-card border rounded-lg p-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="h-4 w-24 bg-muted rounded" />
+                <div className="h-8 w-8 bg-muted rounded-full" />
+              </div>
+              <div className="h-8 w-32 bg-muted rounded" />
+              <div className="h-3 w-20 bg-muted rounded" />
+            </div>
+          ))}
+        </div>
+
+        {/* Charts Skeleton */}
+        <div className="grid gap-6 md:grid-cols-2">
+          {[1, 2].map((i) => (
+            <div key={i} className="bg-card border rounded-lg p-6 space-y-4">
+              <div className="h-5 w-40 bg-muted rounded" />
+              <div className="h-[200px] bg-muted rounded-md flex items-center justify-center">
+                <BarChart3 className="h-12 w-12 text-muted-foreground/30" />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Loading indicator */}
+        <div className="flex items-center justify-center py-4">
+          <div className="flex items-center gap-3 text-muted-foreground">
+            <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Loading your analytics...</span>
+          </div>
         </div>
       </div>
     );

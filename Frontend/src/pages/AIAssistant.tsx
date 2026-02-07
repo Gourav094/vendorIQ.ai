@@ -112,15 +112,10 @@ const AIAssistant: React.FC = () => {
 
       if (data.total > 0) {
         setVendorStatusMsg(`Loaded ${data.total} vendor${data.total === 1 ? '' : 's'}`);
-        toast({
-          title: "✓ Vendors Loaded",
-          description: `Found ${data.total} vendor ${data.total === 1 ? 'folder' : 'folders'} in Drive`,
-        });
       } else {
         setVendorError("No vendor folders found");
         setVendorStatusMsg("No vendors found");
         toast({
-          title: "No Vendors Found",
           description: "Sync emails first to create vendor folders.",
           variant: "destructive",
         });

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface AnalyticsApiResponse {
   success?: boolean;
@@ -24,15 +25,7 @@ interface AnalyticsApiResponse {
 // Use API Gateway instead of direct service call
 const API_GATEWAY_URL = (import.meta as any).env?.VITE_API_GATEWAY_URL || "http://localhost:4000";
 
-const fetchAnalytics = async (period: string): Promise<AnalyticsApiResponse | null> => {
-  const userId = localStorage.getItem("userId");
-  
-  // userId is REQUIRED by the backend - but don't throw, return null
-  if (!userId) {
-    console.warn("Analytics: No userId found in localStorage");
-    return null;
-  }
-  
+const fetchAnalytics = async (period: string, userId: string): Promise<AnalyticsApiResponse | null> => {
   const url = `${API_GATEWAY_URL}/chat/api/v1/analytics?period=${period}&userId=${userId}`;
   console.log("Fetching analytics:", url);
   
@@ -66,11 +59,12 @@ const fetchAnalytics = async (period: string): Promise<AnalyticsApiResponse | nu
 };
 
 export const useAnalytics = (period: string = "year") => {
-  const userId = localStorage.getItem("userId");
+  const { user } = useAuth();
+  const userId = user?.id;
   
   return useQuery({
     queryKey: ["analytics", period, userId],
-    queryFn: () => fetchAnalytics(period),
+    queryFn: () => fetchAnalytics(period, userId!),
     staleTime: 15 * 60 * 1000, // Data is fresh for 15 minutes
     gcTime: 30 * 60 * 1000, // Cache persists for 30 minutes
     retry: 1, // Only retry once

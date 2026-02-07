@@ -178,6 +178,21 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     } catch (e) {
       console.warn('Logout request failed:', e);
     } finally {
+      // Clear all app caches on logout
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (
+          key.startsWith('invoice_cache_') ||
+          key === 'lastVendorId' ||
+          key === 'lastVendorName' ||
+          key === 'userId'
+        )) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      
       setUser(null);
     }
   };
