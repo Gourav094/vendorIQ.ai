@@ -6,7 +6,7 @@ import { useResizableSidebar } from "@/hooks/use-resizable-sidebar";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useEffect } from "react";
 import Settings from "@/pages/Settings";
-import EmailSync from "@/pages/EmailSync_simplified";
+import EmailSync from "@/pages/EmailSync";
 import ScheduledJobs from "@/pages/ScheduledJobs";
 import Vendors from "@/pages/Vendors";
 import Invoices from "@/pages/Invoices";

@@ -45,19 +45,19 @@ export default function ProcessingStatus() {
     const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
 
     // React Query hooks - initial fetch
-    const { 
-        data, 
-        isLoading, 
+    const {
+        data,
+        isLoading,
         refetch,
-        isFetching 
+        isFetching
     } = useProcessingStatus(userId, true);
 
     // Enable auto-polling when there are processing documents
     const isProcessing = (data?.summary?.processing ?? 0) > 0;
-    
+
     useEffect(() => {
         if (!isProcessing || !userId) return;
-        
+
         const interval = setInterval(() => {
             queryClient.invalidateQueries({ queryKey: ["processingStatus", userId] });
         }, 10000); // Poll every 10 seconds
@@ -273,29 +273,26 @@ export default function ProcessingStatus() {
 
                     {/* Alerts */}
                     {summary && summary.failed > 0 && (
-                        <Card className="border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/20">
-                            <CardHeader className="pb-3">
-                                <CardTitle className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                        <XCircle className="h-5 w-5 text-red-600" />
-                                        {summary.failed} Failed Documents
-                                    </div>
-                                    <Button 
-                                        size="sm" 
-                                        onClick={handleRetryAllFailed} 
-                                        disabled={retryAllFailedMutation.isPending} 
-                                        variant="outline"
-                                    >
-                                        {retryAllFailedMutation.isPending ? (
-                                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                                        ) : (
-                                            <RefreshCw className="h-4 w-4 mr-2" />
-                                        )}
-                                        Retry All Failed
-                                    </Button>
-                                </CardTitle>
-                            </CardHeader>
-                        </Card>
+                        <Alert className="flex items-center justify-between bg-transparent">
+                            <div className="flex items-center gap-2">
+                                <XCircle className="h-4 w-4 text-red-500" />
+                                {summary.failed} Failed Documents !
+                            </div>
+                            <Button
+                                className="border"
+                                size="sm"
+                                onClick={handleRetryAllFailed}
+                                disabled={retryAllFailedMutation.isPending}
+                                variant="outline"
+                            >
+                                Retry
+                                {retryAllFailedMutation.isPending ? (
+                                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                ) : (
+                                    <RefreshCw className="h-4 w-4 mr-2" />
+                                )}
+                            </Button>
+                        </Alert>
                     )}
 
                     {/* Documents List */}
@@ -329,17 +326,14 @@ export default function ProcessingStatus() {
                                                         {doc.indexed && doc.indexedAt && (
                                                             <span className="ml-2">• Indexed {formatDistanceToNow(new Date(doc.indexedAt), { addSuffix: true })}</span>
                                                         )}
-                                                        {doc.ocrStatus === "FAILED" && doc.ocrError && (
-                                                            <span className="text-red-600">Error: {doc.ocrError}</span>
-                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="flex gap-2">
                                                     {(doc.ocrStatus === "FAILED" || doc.ocrStatus === "PENDING") && (
-                                                        <Button 
-                                                            size="sm" 
-                                                            variant="outline" 
-                                                            onClick={() => handleRetryInvoice(doc.driveFileId, doc.ocrStatus)} 
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => handleRetryInvoice(doc.driveFileId, doc.ocrStatus)}
                                                             disabled={retryDocumentMutation.isPending && retryDocumentMutation.variables?.driveFileId === doc.driveFileId}
                                                         >
                                                             {retryDocumentMutation.isPending && retryDocumentMutation.variables?.driveFileId === doc.driveFileId ? (
@@ -407,10 +401,10 @@ export default function ProcessingStatus() {
                                                         </TableCell>
                                                         <TableCell>
                                                             {job.status === "FAILED" && job.retryCount < job.maxRetries && (
-                                                                <Button 
-                                                                    size="sm" 
-                                                                    variant="outline" 
-                                                                    onClick={() => handleRetryJob(job.jobId)} 
+                                                                <Button
+                                                                    size="sm"
+                                                                    variant="outline"
+                                                                    onClick={() => handleRetryJob(job.jobId)}
                                                                     disabled={retryJobMutation.isPending && retryJobMutation.variables?.jobId === job.jobId}
                                                                 >
                                                                     {retryJobMutation.isPending && retryJobMutation.variables?.jobId === job.jobId ? (

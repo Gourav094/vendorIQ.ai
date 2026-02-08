@@ -41,7 +41,7 @@ const AIAssistant: React.FC = () => {
     refetch: refetchVendors 
   } = useVendors(user?.id);
 
-  const { data: chatStats } = useChatStats(user?.id);
+  const { data: chatStats, refetch: refetchChatStats } = useChatStats(user?.id);
 
   const vendors = vendorsData?.vendors ?? [];
   const hasIndexedData = chatStats ? chatStats.indexed > 0 : null;
@@ -307,10 +307,16 @@ const AIAssistant: React.FC = () => {
               
               {/* Show sync warning if no indexed data */}
               {hasIndexedData === false && (
-                <div className="mb-6 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800">
+                <div className="mb-6 p-4 rounded-lg bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 flex items-center justify-between gap-4">
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">
                     ⚠️ No indexed data found. Please sync your emails and process documents first.
                   </p>
+                  <button
+                    onClick={() => refetchChatStats()}
+                    className="text-xs px-2 py-1 rounded border hover:bg-yellow-100 dark:hover:bg-yellow-800/50 transition-colors"
+                  >
+                    Refresh
+                  </button>
                 </div>
               )}
               
@@ -420,7 +426,7 @@ const AIAssistant: React.FC = () => {
 
       <div className="flex-none border-t bg-background px-4 sm:px-6 py-4">
         <div className="max-w-3xl mx-auto">
-          <div className="relative bg-muted rounded-2xl border shadow-sm focus-within:border-primary focus-within:ring-1 focus-within:ring-primary transition-all">
+          <div className="relative bg-muted rounded-2xl shadow-sm   transition-all">
             <div className="flex items-end gap-2 p-2">
               <div className="relative flex-shrink-0" ref={dropdownRef}>
                 <button

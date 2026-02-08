@@ -120,7 +120,6 @@ export default function SimpleStatus() {
 
         setRetrying("all");
         toast({
-            title: "Retrying Failed Documents",
             description: `Retrying ${failedDocs.length} failed documents...`
         });
 

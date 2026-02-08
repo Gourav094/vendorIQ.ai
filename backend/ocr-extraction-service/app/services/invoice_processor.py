@@ -299,8 +299,19 @@ async def process_vendor_invoices(
         if web_content_link:
             enriched["web_content_link"] = web_content_link
 
-        # Append to in-memory master data
-        master_records.append(enriched)
+        # Update or append to master data (avoid duplicates by drive_file_id)
+        if file_id in master_index:
+            # Update existing entry
+            idx = next((i for i, r in enumerate(master_records) if r.get("drive_file_id") == file_id), None)
+            if idx is not None:
+                master_records[idx] = enriched
+                logger.info(f"[OCR] Updated existing record: {file_name}")
+            else:
+                master_records.append(enriched)
+        else:
+            # New entry
+            master_records.append(enriched)
+        
         master_index[file_id] = enriched
         processed.append(file_id)
         logger.info(f"[OCR] Completed: {file_name}")
