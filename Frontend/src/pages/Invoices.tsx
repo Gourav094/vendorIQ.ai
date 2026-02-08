@@ -20,15 +20,15 @@ import {
   AlertCircle,
   ArrowLeft,
   Search,
-  Filter
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
-import api, { type Invoice, type MasterRecord, type MasterSummary } from "@/services/api";
+import { type MasterRecord } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useInvoices } from "@/hooks/use-invoices";
+import { useExchangeRates, BASE_CURRENCY } from "@/hooks/use-exchange-rates";
 
-const BASE_CURRENCY = "INR";
 const SUPPORTED_CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD"] as const;
 type SupportedCurrency = (typeof SUPPORTED_CURRENCIES)[number];
 
@@ -44,7 +44,7 @@ const Invoices = () => {
   const urlVendorId = searchParams.get("vendorId");
   const urlVendorName = searchParams.get("vendorName");
   
-  const [vendorId, setVendorId] = useState(() => {
+  const [vendorId] = useState(() => {
     if (urlVendorId) {
       localStorage.setItem('lastVendorId', urlVendorId);
       if (urlVendorName) {
@@ -55,25 +55,35 @@ const Invoices = () => {
     return localStorage.getItem('lastVendorId') || "";
   });
   
-  const [vendorName, setVendorName] = useState(() => {
+  const [vendorName] = useState(() => {
     if (urlVendorName) {
       return urlVendorName;
     }
     return localStorage.getItem('lastVendorName') || "";
   });
-  
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+
+  // React Query hooks
+  const { 
+    data: invoicesData, 
+    isLoading, 
+    isFetching,
+    refetch 
+  } = useInvoices(userId, vendorId);
+
+  const {
+    data: ratesData,
+    isLoading: ratesLoading,
+    error: ratesError,
+  } = useExchangeRates(true);
+
+  const invoices = invoicesData?.invoices ?? [];
+  const masterSummary = invoicesData?.masterSummary ?? null;
+  const masterError = invoicesData?.masterError ?? null;
+  const exchangeRates = ratesData?.rates ?? null;
+  const ratesTimestamp = ratesData?.timestamp ?? null;
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [masterSummary, setMasterSummary] = useState<MasterSummary | null>(null);
-  const [isMasterLoading, setIsMasterLoading] = useState(false);
-  const [masterError, setMasterError] = useState<string | null>(null);
   const [currencyPreference, setCurrencyPreference] = useState<SupportedCurrency>(BASE_CURRENCY);
-  const [exchangeRates, setExchangeRates] = useState<Record<string, number> | null>(null);
-  const [ratesLoading, setRatesLoading] = useState(false);
-  const [ratesError, setRatesError] = useState<string | null>(null);
-  const [ratesTimestamp, setRatesTimestamp] = useState<string | null>(null);
-  const [loadedFromCache, setLoadedFromCache] = useState(false);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -86,216 +96,16 @@ const Invoices = () => {
     }
   }, [user, navigate, toast]);
 
+  // Show toast when master summary is loaded
   useEffect(() => {
-    if (userId && vendorId) {
-      loadInvoicesWithCache();
-    }
-  }, [userId, vendorId]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const controller = new AbortController();
-
-    const fetchRates = async () => {
-      setRatesLoading(true);
-      try {
-        const response = await fetch(`https://open.er-api.com/v6/latest/${BASE_CURRENCY}`, {
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Exchange rate request failed with status ${response.status}`);
-        }
-
-        const payload = await response.json();
-
-        if (payload.result !== "success" || !payload.rates) {
-          const reason = payload["error-type"] || "Unable to retrieve exchange rates right now.";
-          throw new Error(reason);
-        }
-
-        if (!isMounted) return;
-        const normalizedRates = Object.entries(payload.rates as Record<string, unknown>).reduce<Record<string, number>>(
-          (acc, [code, value]) => {
-            if (typeof value === "number") {
-              acc[code.toUpperCase()] = value;
-            }
-            return acc;
-          },
-          {}
-        );
-        normalizedRates[BASE_CURRENCY] = normalizedRates[BASE_CURRENCY] ?? 1;
-        setExchangeRates(normalizedRates);
-        setRatesError(null);
-        const timestamp =
-          typeof payload.time_last_update_unix === "number"
-            ? new Date(payload.time_last_update_unix * 1000).toLocaleString()
-            : typeof payload.time_last_update_utc === "string"
-              ? payload.time_last_update_utc
-              : null;
-        setRatesTimestamp(timestamp);
-      } catch (error) {
-        if ((error as { name?: string }).name === "AbortError") {
-          return;
-        }
-        if (!isMounted) return;
-        setExchangeRates(null);
-        setRatesError(error instanceof Error ? error.message : "Unexpected error loading exchange rates.");
-        setRatesTimestamp(null);
-      } finally {
-        if (isMounted) {
-          setRatesLoading(false);
-        }
-      }
-    };
-
-    fetchRates();
-
-    return () => {
-      isMounted = false;
-      controller.abort();
-    };
-  }, []);
-
-  const getCacheKey = (vId: string) => `invoice_cache_${userId}_${vId}`;
-
-  const loadInvoicesWithCache = async (forceRefresh = false) => {
-    if (!userId || !vendorId) return;
-
-    const cacheKey = getCacheKey(vendorId);
-    const cachedData = localStorage.getItem(cacheKey);
-
-    // Try to load from cache first
-    if (!forceRefresh && cachedData) {
-      try {
-        const parsed = JSON.parse(cachedData);
-
-        setInvoices(parsed.invoices || []);
-        setMasterSummary(parsed.masterSummary || null);
-        setMasterError(parsed.masterError || null);
-        setLoadedFromCache(true);
-        return; 
-      } catch (error) {
-        console.error("Cache parse error:", error);
-        // Continue to fetch if cache is invalid
-      }
-    }
-
-    // Cache miss or expired - fetch fresh data
-    await fetchInvoices();
-  };
-
-  const fetchInvoices = async () => {
-    if (!userId || !/^[a-f0-9]{24}$/i.test(userId)) {
+    if (masterSummary?.records?.length) {
       toast({
-        description: "User ID must be exactly 24 characters (hexadecimal). Example: 690c7d0ee107fb31784c1b1b",
-        variant: "destructive",
+        description: `Loaded ${masterSummary.records.length} processed invoice ${
+          masterSummary.records.length === 1 ? "entry" : "entries"
+        } from master.json`,
       });
-      return;
     }
-
-    if (!vendorId) {
-      toast({
-        description: "Please select a vendor from the Vendors page or enter a Google Drive folder ID below.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setIsLoading(true);
-    setMasterSummary(null);
-    setMasterError(null);
-    setLoadedFromCache(false);
-    
-    try {
-      const { data, response } = await api.getInvoices(userId, vendorId);
-
-      if (response.ok) {
-        const invoiceData = data as { invoices: Invoice[]; total: number };
-        setInvoices(invoiceData.invoices || []);
-        if (invoiceData.total < 0) {
-          toast({
-            title: "No Invoices Found",
-            description: `No invoice files found for ${vendorName || 'this vendor'}. Try syncing emails to fetch new invoices.`,
-            variant: "destructive",
-          });
-        }
-
-        // Fetch master summary and get the result directly for caching
-        const masterResult = await fetchMasterSummary(userId, vendorId);
-
-        // Cache the data with the actual master result
-        const cacheKey = getCacheKey(vendorId);
-        if (masterResult.summary || invoiceData.invoices?.length > 0) {
-          localStorage.setItem(
-            cacheKey,
-            JSON.stringify({
-              timestamp: Date.now(),
-              invoices: invoiceData.invoices || [],
-              masterSummary: masterResult.summary,
-              masterError: masterResult.error,
-            })
-          );
-        }
-      } else {
-        // API error - clear cache
-        const cacheKey = getCacheKey(vendorId);
-        localStorage.removeItem(cacheKey);
-        toast({
-          description:
-            (data as any).message ||
-            (data as any).details ||
-            "Failed to fetch invoices from Google Drive. Verify your vendor ID and Google connection.",
-          variant: "default",
-        });
-      }
-    } catch (error) {
-      // Network error - clear cache
-      const cacheKey = getCacheKey(vendorId);
-      localStorage.removeItem(cacheKey);
-      toast({
-        description: "Cannot reach the email service. Please ensure the backend is running on port 4002.",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  const fetchMasterSummary = async (selectedUserId: string, selectedVendorId: string): Promise<{ summary: MasterSummary | null; error: string | null }> => {
-    setIsMasterLoading(true);
-    try {
-      const { data, response } = await api.getVendorMaster(selectedUserId, selectedVendorId);
-      if (!response.ok) {
-        const error = (data as any).message || data.reason || "Master data not available for this vendor yet.";
-        setMasterError(error);
-        setMasterSummary(null);
-        return { summary: null, error };
-      }
-
-      setMasterSummary(data);
-      setMasterError(null);
-      
-      if (data.records?.length) {
-        toast({
-          description: `Loaded ${data.records.length} processed invoice ${
-            data.records.length === 1 ? "entry" : "entries"
-          } from master.json`,
-        });
-        return { summary: data, error: null };
-      } else {
-        const error = "Master file found but contains no processed invoices yet.";
-        setMasterError(error);
-        return { summary: null, error };
-      }
-    } catch (error) {
-      const errorMsg = "Unable to load master analytics. Please ensure the OCR service uploaded master.json for this vendor.";
-      setMasterError(errorMsg);
-      setMasterSummary(null);
-      return { summary: null, error: errorMsg };
-    } finally {
-      setIsMasterLoading(false);
-    }
-  };
+  }, [masterSummary?.records?.length]);
 
   const openInvoice = (webViewLink: string, fileName: string) => {
     window.open(webViewLink, '_blank', 'noopener,noreferrer');
@@ -327,6 +137,7 @@ const Invoices = () => {
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / PAGE_SIZE));
   const paginatedInvoices = filteredInvoices.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  
   useEffect(() => {
     if (page > totalPages) setPage(1);
   }, [filteredInvoices.length, totalPages, page]);
@@ -390,7 +201,7 @@ const Invoices = () => {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       }).format(amount);
-    } catch (error) {
+    } catch {
       return amount.toLocaleString("en-US", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
@@ -420,7 +231,7 @@ const Invoices = () => {
 
     const rate = exchangeRates?.[targetCurrency];
     if (!rate || rate === 0) {
-      return { value: amount * rate, available: false } as const;
+      return { value: amount * (rate || 0), available: false } as const;
     }
 
     return { value: amount * rate, available: true } as const;
@@ -498,6 +309,8 @@ const Invoices = () => {
     label: code === BASE_CURRENCY ? `${code} (Base)` : code,
   }));
 
+  const isMasterLoading = isLoading;
+
   const analyticsCard =
     (isMasterLoading || masterSummary || masterError) && (
       <Card>
@@ -557,7 +370,7 @@ const Invoices = () => {
               {ratesError && (
                 <div className="flex items-center gap-2 rounded-md border border-dashed border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                   <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                  <span className="break-words">{ratesError}</span>
+                  <span className="break-words">{ratesError.message}</span>
                 </div>
               )}
               {ratesTimestamp && !ratesError && (
@@ -670,48 +483,11 @@ const Invoices = () => {
             </p>
           </div>
         </div>
-        <Button onClick={() => loadInvoicesWithCache(true)} disabled={isLoading || !vendorId}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+        <Button onClick={() => refetch()} disabled={isLoading || isFetching || !vendorId}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${(isLoading || isFetching) ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
-
-      {/* Configuration Card */}
-      {/* {!searchParams.get("vendorId") && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Configuration</CardTitle>
-            <CardDescription>Set your user ID and vendor ID to fetch invoices</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="grid gap-2">
-                <Label htmlFor="userId">User ID (MongoDB ObjectId)</Label>
-                <Input
-                  id="userId"
-                  value={userId}
-                  onChange={(e) => setUserId(e.target.value)}
-                  placeholder="690c7d0ee107fb31784c1b1b"
-                  className="font-mono"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="vendorId">Vendor ID (Google Drive Folder ID)</Label>
-                <Input
-                  id="vendorId"
-                  value={vendorId}
-                  onChange={(e) => setVendorId(e.target.value)}
-                  placeholder="1MNDIrzwi3TSrhLWil_y3JY4ttlZQCaOp"
-                  className="font-mono"
-                />
-              </div>
-            </div>
-            <Button onClick={fetchInvoices} disabled={isLoading} className="w-full">
-              Load Invoices
-            </Button>
-          </CardContent>
-        </Card>
-      )} */}
 
       {/* Vendor Info Badge */}
       {vendorName && (
@@ -877,11 +653,6 @@ const Invoices = () => {
           )}
         </>
       )}
-
-      {/* Summary Stats */}
-      {/* Counts removed per requirement */}
-
-      {/* Analytics Section relocated above */}
     </div>
   );
 };

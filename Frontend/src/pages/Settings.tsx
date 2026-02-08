@@ -1,51 +1,28 @@
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Card } from "@/components/ui/card";
-import React, { useState, useEffect, useCallback } from 'react';
-import { AlertCircle, Database, FolderOpen, Mail, CheckCircle2, ExternalLink, Unplug } from "lucide-react";
+import { useEffect } from 'react';
+import { AlertCircle, Mail, CheckCircle2, ExternalLink, Unplug, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import api, { type SyncStatus, disconnectGoogleAccount } from "@/services/api";
+import api from "@/services/api";
+import { useSyncStatus, useDisconnectGoogle } from "@/hooks/use-sync-status";
 
 const Settings = () => {
   const { toast } = useToast();
-  const { user } = useAuth(); // Get authenticated user
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const { user } = useAuth();
+  
+  const { 
+    data: syncStatus, 
+    isLoading, 
+    refetch: refetchSyncStatus 
+  } = useSyncStatus(user?.id);
+  
+  const disconnectMutation = useDisconnectGoogle();
 
-  const fetchSyncStatus = useCallback(async () => {
-    if (!user?.id) {
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const { data, response } = await api.getUserSyncStatus(user.id);
-
-      if (response.ok) {
-        setSyncStatus(data);
-        setIsConnected(data.hasGoogleConnection);
-      } else {
-        setSyncStatus(null);
-        setIsConnected(false);
-      }
-    } catch (error) {
-      setIsConnected(false);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [user?.id]);
-
-  useEffect(() => {
-    if (user?.id) {
-      fetchSyncStatus();
-    }
-  }, [user?.id, fetchSyncStatus]);
+  const isConnected = syncStatus?.hasGoogleConnection ?? false;
 
   // Handle OAuth callback redirect (if user returns here)
   useEffect(() => {
@@ -62,9 +39,9 @@ const Settings = () => {
       window.history.replaceState({}, '', '/settings');
 
       // Refresh sync status
-      setTimeout(() => fetchSyncStatus(), 1000);
+      setTimeout(() => refetchSyncStatus(), 1000);
     }
-  }, [toast, fetchSyncStatus]);
+  }, [toast, refetchSyncStatus]);
 
   const connectGoogleAccount = () => {
     if (!user?.id) {
@@ -81,18 +58,15 @@ const Settings = () => {
     if (!user?.id) return;
     const confirm = window.confirm("Disconnect Google Drive & Gmail integration? This will stop further indexing until reconnected.");
     if (!confirm) return;
-    try {
-      const { data, response } = await disconnectGoogleAccount(user.id);
-      if (response.ok) {
-        setIsConnected(false);
-        setSyncStatus(s => s ? { ...s, hasGoogleConnection: false } : s);
+    
+    disconnectMutation.mutate(user.id, {
+      onSuccess: (data) => {
         toast({ description: (data as any).message || "Google account disconnected." });
-      } else {
-        toast({description: (data as any).message || 'Unknown error', variant: 'destructive' });
+      },
+      onError: (error) => {
+        toast({ description: error.message || 'Failed to disconnect. Try again later.', variant: 'destructive' });
       }
-    } catch (e) {
-      toast({description: 'Failed to disconnect. Try again later.', variant: 'destructive' });
-    }
+    });
   };
 
   return (
@@ -114,7 +88,12 @@ const Settings = () => {
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-2">
                 <h3 className="text-lg font-semibold">Gmail & Google Drive</h3>
-                {isConnected ? (
+                {isLoading ? (
+                  <Badge variant="secondary">
+                    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                    Loading...
+                  </Badge>
+                ) : isConnected ? (
                   <Badge variant="default" className="bg-green-600">
                     <CheckCircle2 className="h-3 w-3 mr-1" />
                     Connected
@@ -146,15 +125,25 @@ const Settings = () => {
               </ul>
               {isConnected ? (
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={fetchSyncStatus} disabled={isLoading}>
+                  <Button variant="outline" onClick={() => refetchSyncStatus()} disabled={isLoading}>
+                    {isLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                     Refresh Status
                   </Button>
                   <Button variant="outline" onClick={connectGoogleAccount}>
                     <ExternalLink className="h-4 w-4 mr-2" />
                     Reconnect
                   </Button>
-                  <Button variant="destructive" onClick={disconnectGoogle} data-testid="button-disconnect-google">
-                    <Unplug className="h-4 w-4 mr-2" />
+                  <Button 
+                    variant="destructive" 
+                    onClick={disconnectGoogle} 
+                    disabled={disconnectMutation.isPending}
+                    data-testid="button-disconnect-google"
+                  >
+                    {disconnectMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Unplug className="h-4 w-4 mr-2" />
+                    )}
                     Disconnect
                   </Button>
                 </div>

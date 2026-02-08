@@ -27,8 +27,8 @@ export const useVendors = (userId: string, enabled: boolean = true) => {
   return useQuery({
     queryKey: ["vendors", userId],
     queryFn: () => fetchVendors(userId),
-    staleTime: 10 * 60 * 1000, // Data is fresh for 10 minutes
-    gcTime: 20 * 60 * 1000, // Cache persists for 20 minutes
+    staleTime: 8 * 60 * 1000, // Data is fresh for 10 minutes
+    gcTime: 15 * 60 * 1000, // Cache persists for 20 minutes
     retry: 2,
     enabled: enabled && !!userId && /^[a-f0-9]{24}$/i.test(userId),
     refetchOnWindowFocus: false, // Don't refetch when user switches tabs

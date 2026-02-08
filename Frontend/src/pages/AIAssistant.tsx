@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { FiSend, FiPlus, FiSearch, FiX, FiChevronDown } from "react-icons/fi";
-import api, { getChatAnswer, getChatStats } from "../services/api";
+import { getChatAnswer } from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../hooks/use-toast";
 import { Sparkles } from "lucide-react";
+import { useVendors } from "../hooks/use-vendors";
+import { useChatStats } from "../hooks/use-chat-stats";
 
 type ChatSource = { rank: number; vendor_name?: string; similarity?: number; content_excerpt?: string };
 type ChatMessage = {
@@ -23,18 +25,26 @@ const AIAssistant: React.FC = () => {
   const [activeMatchIndex, setActiveMatchIndex] = useState<number>(0);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showVendorDropdown, setShowVendorDropdown] = useState(false);
-  const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
-  const [vendorError, setVendorError] = useState<string>("");
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [selectedVendorName, setSelectedVendorName] = useState("");
-  const [isLoadingVendors, setIsLoadingVendors] = useState(false);
-  const [hasIndexedData, setHasIndexedData] = useState<boolean | null>(null); // null = loading, true/false = checked
   const { user } = useAuth();
   const { toast } = useToast();
   const dropdownRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const vendorsLoadedRef = useRef(false);
+
+  // React Query hooks
+  const { 
+    data: vendorsData, 
+    isLoading: isLoadingVendors, 
+    error: vendorError,
+    refetch: refetchVendors 
+  } = useVendors(user?.id);
+
+  const { data: chatStats } = useChatStats(user?.id);
+
+  const vendors = vendorsData?.vendors ?? [];
+  const hasIndexedData = chatStats ? chatStats.indexed > 0 : null;
 
   const resolveUserId = () => {
     return user?.id || "";
@@ -64,98 +74,6 @@ const AIAssistant: React.FC = () => {
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + "px";
     }
   }, [input]);
-
-  // Check if user has any indexed data on mount
-  useEffect(() => {
-    const checkIndexedData = async () => {
-      const effectiveUserId = resolveUserId();
-      if (!effectiveUserId) return;
-
-      try {
-        const { data, response } = await getChatStats(effectiveUserId);
-        if (response.ok) {
-          setHasIndexedData(data.indexed > 0);
-          if (data.indexed === 0) {
-            console.log("[AIAssistant] No indexed data found. User needs to sync first.");
-          }
-        }
-      } catch (e) {
-        console.error("[AIAssistant] Failed to check indexed data:", e);
-        setHasIndexedData(false);
-      }
-    };
-
-    if (user?.id) {
-      checkIndexedData();
-    }
-  }, [user?.id]);
-
-  const loadVendors = useCallback(async (force = false) => {
-    if (isLoadingVendors || (vendorsLoadedRef.current && !force)) {
-      console.log('[AIAssistant] Skipping vendor load (already loaded or in progress)');
-      return;
-    }
-
-    const effectiveUserId = resolveUserId();
-
-    if (!effectiveUserId) {
-      setVendorError("Missing user id");
-      return;
-    }
-
-    if (!/^[a-f0-9]{24}$/i.test(effectiveUserId)) {
-      setVendorError("Invalid User ID format");
-      toast({
-        description: "User ID must be a 24-char hex ObjectId.",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    setIsLoadingVendors(true);
-    setVendorError("");
-
-    try {
-      const { data, response } = await api.getVendors(effectiveUserId);
-      console.log("[AIAssistant] getVendors response status", response.status, "payload:", data);
-
-      if (!response.ok) {
-        const msg = (data as any).message || (data as any).details || `HTTP ${response.status}`;
-        throw new Error(msg);
-      }
-
-      const incoming = data.vendors || [];
-      setVendors(incoming);
-      vendorsLoadedRef.current = true;
-      console.log("[AIAssistant] vendors stored in state count=", incoming.length, incoming);
-
-      if (data.total === 0) {
-        setVendorError("No vendor folders found");
-        toast({
-          description: "Sync emails first to create vendor folders.",
-          variant: "destructive",
-        });
-      }
-    } catch (e: any) {
-      console.error("[AIAssistant] vendor load error", e);
-      const errMsg = e.message || "Failed to load vendors";
-      setVendorError(errMsg);
-      vendorsLoadedRef.current = false;
-      toast({
-        description: errMsg,
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoadingVendors(false);
-    }
-  }, [user?.id, isLoadingVendors, toast]);
-
-  useEffect(() => {
-    if (user?.id && !vendorsLoadedRef.current && !isLoadingVendors) {
-      console.log('[AIAssistant] Triggering initial vendor load');
-      loadVendors();
-    }
-  }, [user?.id, loadVendors]);
 
   const formatTime = () =>
     new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -306,7 +224,7 @@ const AIAssistant: React.FC = () => {
 
   const handleVendorDropdownClick = () => {
     if (!vendors.length && !vendorError && !isLoadingVendors) {
-      loadVendors();
+      refetchVendors();
     }
     setShowVendorDropdown(!showVendorDropdown);
   };
@@ -528,11 +446,11 @@ const AIAssistant: React.FC = () => {
                       ) : vendors.length === 0 ? (
                         <div className="px-3 py-2">
                           <p className="text-sm text-muted-foreground mb-2">
-                            {vendorError || "No vendors found"}
+                            {vendorError?.message || "No vendors found"}
                           </p>
                           {vendorError && (
                             <button
-                              onClick={() => loadVendors(true)}
+                              onClick={() => refetchVendors()}
                               className="text-xs text-primary hover:underline"
                             >
                               Retry

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
@@ -19,12 +20,23 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import api, { type SyncStatus, type PendingDocumentsResponse } from "@/services/api";
+import api from "@/services/api";
+import { useSyncStatus, useResetSyncStatus } from "@/hooks/use-sync-status";
+import { usePendingDocuments } from "@/hooks/use-pending-documents";
 
 export default function EmailSync() {
     const { toast } = useToast();
     const { user } = useAuth();
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
+
+    // React Query hooks
+    const { data: syncStatus, isLoading: isSyncLoading } = useSyncStatus(user?.id);
+    const { data: pendingData, isLoading: isLoadingPending, refetch: refetchPending } = usePendingDocuments(user?.id);
+    const resetSyncMutation = useResetSyncStatus();
+
+    const isConnected = syncStatus?.hasGoogleConnection ?? false;
+    const pendingDocuments = pendingData?.documents ?? [];
 
     const [fromDate, setFromDate] = useState(() => {
         const stored = localStorage.getItem("emailSyncFromDate");
@@ -35,15 +47,10 @@ export default function EmailSync() {
     const [vendorEmails, setVendorEmails] = useState(() => localStorage.getItem("emailSyncVendorEmails") || "");
     const [forceSync, setForceSync] = useState(() => localStorage.getItem("emailSyncForceSync") === "true");
 
-    const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
-    const [isConnected, setIsConnected] = useState(false);
     const [isFetching, setIsFetching] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [pendingDocuments, setPendingDocuments] = useState<PendingDocumentsResponse["documents"]>([]);
-    const [isLoadingPending, setIsLoadingPending] = useState(false);
     const [statusMessage, setStatusMessage] = useState("");
     const [activityLogs, setActivityLogs] = useState<string[]>([]);
-    const [isResetting, setIsResetting] = useState(false);
 
     // Persist to localStorage
     useEffect(() => {
@@ -52,113 +59,50 @@ export default function EmailSync() {
     useEffect(() => { localStorage.setItem("emailSyncVendorEmails", vendorEmails); }, [vendorEmails]);
     useEffect(() => { localStorage.setItem("emailSyncForceSync", String(forceSync)); }, [forceSync]);
 
-    // Check sync status and pending documents on mount
-    useEffect(() => {
-        if (user?.id) {
-            fetchSyncStatus();
-            fetchPendingDocuments();
-        }
-    }, [user?.id]);
-
     const addLog = (message: string) => {
         const timestamp = new Date().toLocaleTimeString();
         setActivityLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 50));
     };
 
-    const fetchPendingDocuments = async () => {
-        if (!user?.id) return;
-
-        setIsLoadingPending(true);
-        try {
-            const { data, response } = await api.getPendingDocuments(user.id);
-            if (response.ok && data.success) {
-                setPendingDocuments(data.documents);
-                if (data.count > 0) {
-                    addLog(`Found ${data.count} documents pending OCR processing`);
-                }
-            }
-        } catch (error) {
-            console.error("Failed to fetch pending documents:", error);
-        } finally {
-            setIsLoadingPending(false);
+    // Log when pending documents are loaded
+    useEffect(() => {
+        if (pendingData?.count && pendingData.count > 0) {
+            addLog(`Found ${pendingData.count} documents pending OCR processing`);
         }
-    };
-
-    const fetchSyncStatus = async () => {
-        if (!user?.id) {
-            setStatusMessage("Please log in to continue");
-            return;
-        }
-
-        try {
-            const { data, response } = await api.getUserSyncStatus(user.id);
-            if (response.ok) {
-                setSyncStatus(data);
-                setIsConnected(data.hasGoogleConnection);
-                setStatusMessage(data.message);
-                addLog(`Sync status loaded: ${data.message}`);
-            } else {
-                setStatusMessage("Failed to fetch sync status");
-                setIsConnected(false);
-                addLog("Failed to load sync status");
-            }
-        } catch (error) {
-            setStatusMessage("Network error");
-            setIsConnected(false);
-            addLog("Network error while loading sync status");
-        }
-    };
+    }, [pendingData?.count]);
 
     const handleResetSync = async () => {
         if (!user?.id) {
-            toast({
-                description: "Please log in first",
-            });
+            toast({ description: "Please log in first" });
             return;
         }
 
-        setIsResetting(true);
         addLog("Resetting sync status...");
 
-        try {
-            const [syncResponse] = await Promise.all([
-                api.resetUserSyncStatus(user.id),
-                api.clearInvoiceProcessingStatus(user.id)
-            ]);
-
-            if (syncResponse.response.ok) {
-                setPendingDocuments([]);
-                
+        resetSyncMutation.mutate(user.id, {
+            onSuccess: () => {
                 toast({ title: "Success", description: "Sync status reset successfully" });
                 addLog("Sync status reset successfully");
-                await fetchSyncStatus();
-            } else {
-                throw new Error("Reset failed");
+            },
+            onError: (error) => {
+                toast({
+                    title: "Error",
+                    description: error.message || "Failed to reset sync",
+                    variant: "destructive",
+                });
+                addLog("Failed to reset sync status");
             }
-        } catch (error) {
-            toast({
-                title: "Error",
-                description: error instanceof Error ? error.message : "Failed to reset sync",
-                variant: "destructive",
-            });
-            addLog("Failed to reset sync status");
-        } finally {
-            setIsResetting(false);
-        }
+        });
     };
 
     const handleFetchEmails = async () => {
         if (!user?.id) {
-            toast({
-                description: "Please log in first",
-            });
+            toast({ description: "Please log in first" });
             return;
         }
 
         if (!fromDate) {
-            toast({
-                description: "Please select a 'From Date'.",
-            });
+            toast({ description: "Please select a 'From Date'." });
             return;
         }
 
@@ -187,20 +131,17 @@ export default function EmailSync() {
                 setStatusMessage(`Fetched ${newDocs.length} new documents successfully`);
                 addLog(`Successfully fetched ${newDocs.length} new documents (${skippedCount} skipped as duplicates)`);
                 
-                await fetchPendingDocuments();
+                // Invalidate and refetch pending documents
+                refetchPending();
 
-                toast({
-                    description: `${newDocs.length} new documents uploaded to Drive`,
-                });
+                toast({ description: `${newDocs.length} new documents uploaded to Drive` });
             } else {
                 throw new Error("Fetch failed");
             }
         } catch (error) {
             setStatusMessage("Fetch failed");
             addLog(`❌ Error: ${error instanceof Error ? error.message : "Failed to fetch emails"}`);
-            toast({
-                description: error instanceof Error ? error.message : "Failed to fetch emails",
-            });
+            toast({ description: error instanceof Error ? error.message : "Failed to fetch emails" });
         } finally {
             setIsFetching(false);
         }
@@ -224,9 +165,11 @@ export default function EmailSync() {
             const { data, response } = await api.processDocuments(user.id);
 
             if (response.ok && data.success) {
-                toast({
-                    description: `${data.totalDocuments} documents are being processed.`,
-                });
+                toast({ description: `${data.totalDocuments} documents are being processed.` });
+                
+                // Invalidate processing status cache before navigating
+                queryClient.invalidateQueries({ queryKey: ["processingStatus", user.id] });
+                queryClient.invalidateQueries({ queryKey: ["pendingDocuments", user.id] });
 
                 navigate("/processing-status?tab=invoices");
             } else {
@@ -262,10 +205,13 @@ export default function EmailSync() {
                                 Google Account
                             </CardTitle>
                             <CardDescription>
-                                {isConnected
-                                    ? `Connected as: ${syncStatus?.email || user?.email || "Unknown"}`
-                                    : "Connect your Google account from Settings to start"
-                                }
+                                {isSyncLoading ? (
+                                    "Loading connection status..."
+                                ) : isConnected ? (
+                                    `Connected as: ${syncStatus?.email || user?.email || "Unknown"}`
+                                ) : (
+                                    "Connect your Google account from Settings to start"
+                                )}
                             </CardDescription>
                             {syncStatus?.lastSyncedAt && (
                                 <p className="text-xs text-muted-foreground mt-1">
@@ -274,15 +220,17 @@ export default function EmailSync() {
                             )}
                         </div>
                         <div className="flex items-center gap-2">
-                            {isConnected ? (
+                            {isSyncLoading ? (
+                                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                            ) : isConnected ? (
                                 <>
                                     <Button
                                         onClick={handleResetSync}
-                                        disabled={isResetting}
+                                        disabled={resetSyncMutation.isPending}
                                         variant="outline"
                                         size="sm"
                                     >
-                                        {isResetting ? (
+                                        {resetSyncMutation.isPending ? (
                                             <>
                                                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                                                 Resetting...
@@ -329,7 +277,6 @@ export default function EmailSync() {
                                 timeFormat="HH:mm"
                                 timeIntervals={15}
                                 maxDate={new Date()}
-
                                 dateFormat="MMM d, yyyy h:mm aa"
                                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                 calendarClassName="!font-sans !shadow-xl !border !border-border !rounded-lg"

@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useUser } from "@/contexts/UserContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,16 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import {
-    listProcessingJobs,
-    retryProcessingJob,
-    getDocumentStatus,
-    retryDocumentsSecure,
-    type ProcessingJob,
-} from "@/services/api";
-import api from "@/services/api";
 import { useToast } from "@/hooks/use-toast";
+import {
+    useProcessingStatus,
+    useRetryDocument,
+    useRetryAllFailed,
+    useRetryJob,
+    useSyncToAI,
+} from "@/hooks/use-processing-status";
 import {
     RefreshCw,
     Clock,
@@ -34,210 +33,109 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
-// Document type from MongoDB (single source of truth)
-interface DocumentRecord {
-    driveFileId: string;
-    fileName: string;
-    vendorName: string;
-    ocrStatus: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
-    indexed: boolean;
-    indexedAt: string | null;
-    ocrCompletedAt: string | null;
-    ocrError: string | null;
-    webViewLink: string;
-    webContentLink: string;
-    createdAt: string;
-    updatedAt: string;
-}
-
-interface DocumentSummary {
-    total: number;
-    pending: number;
-    processing: number;
-    completed: number;
-    failed: number;
-    indexed: number;
-    pendingIndex: number;
-}
-
 export default function ProcessingStatus() {
     const { userId: contextUserId } = useUser();
     const { user: authUser } = useAuth();
     const userId = authUser?.id || contextUserId;
     const [searchParams, setSearchParams] = useSearchParams();
-
     const { toast } = useToast();
+    const queryClient = useQueryClient();
 
     const [activeTab, setActiveTab] = useState(() => searchParams.get("tab") || "invoices");
-
-    const [emailJobs, setEmailJobs] = useState<ProcessingJob[]>([]);
-    const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-    const [summary, setSummary] = useState<DocumentSummary | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [retrying, setRetrying] = useState<string | null>(null);
     const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
-    const [syncing, setSyncing] = useState(false);
-    const [isPolling, setIsPolling] = useState(false);
+
+    // React Query hooks - initial fetch
+    const { 
+        data, 
+        isLoading, 
+        refetch,
+        isFetching 
+    } = useProcessingStatus(userId, true);
+
+    // Enable auto-polling when there are processing documents
+    const isProcessing = (data?.summary?.processing ?? 0) > 0;
+    
+    useEffect(() => {
+        if (!isProcessing || !userId) return;
+        
+        const interval = setInterval(() => {
+            queryClient.invalidateQueries({ queryKey: ["processingStatus", userId] });
+        }, 10000); // Poll every 10 seconds
+
+        return () => clearInterval(interval);
+    }, [isProcessing, userId, queryClient]);
+
+    // Mutations
+    const retryDocumentMutation = useRetryDocument();
+    const retryAllFailedMutation = useRetryAllFailed();
+    const retryJobMutation = useRetryJob();
+    const syncToAIMutation = useSyncToAI();
+
+    const documents = data?.documents ?? [];
+    const summary = data?.summary ?? null;
+    const emailJobs = data?.emailJobs ?? [];
 
     const handleTabChange = (value: string) => {
         setActiveTab(value);
         setSearchParams({ tab: value });
     };
 
-    useEffect(() => {
-        if (userId) {
-            loadStatus();
-        } else {
-            const timer = setTimeout(() => {
-                setLoading(false);
-            }, 1500);
-            return () => clearTimeout(timer);
-        }
-    }, [userId]);
-
-    useEffect(() => {
-        const hasProcessing = summary && summary.processing > 0;
-        
-        if (!hasProcessing || !userId) {
-            setIsPolling(false);
-            return;
-        }
-
-        setIsPolling(true);
-        const pollInterval = setInterval(() => {
-            loadStatusSilent(); // Silent refresh (no loading state)
-        }, 10000); // Poll every 10 seconds
-
-        return () => {
-            clearInterval(pollInterval);
-            setIsPolling(false);
-        };
-    }, [summary?.processing, userId]);
-
-    const loadStatus = async () => {
-        if (!userId) {
-            setLoading(false);
-            return;
-        }
-
-        setLoading(true);
-        try {
-            await fetchDocumentStatus();
-        } catch (error) {
-            console.error("Failed to load processing status:", error);
-            toast({
-                description: "Failed to load processing status. Please try again."
-            });
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Silent refresh without loading indicator (for polling)
-    const loadStatusSilent = async () => {
-        if (!userId) return;
-        try {
-            await fetchDocumentStatus();
-        } catch (error) {
-            console.error("Silent refresh failed:", error);
-        }
-    };
-
-    const fetchDocumentStatus = async () => {
-        const [jobsRes, docStatusRes] = await Promise.all([
-            listProcessingJobs(userId!, { limit: 50 }),
-            getDocumentStatus(userId!),
-        ]);
-
-        if (jobsRes.response.ok && jobsRes.data.jobs) {
-            setEmailJobs(jobsRes.data.jobs);
-        }
-
-        if (docStatusRes.response.ok && docStatusRes.data.success) {
-            setDocuments(docStatusRes.data.documents);
-            setSummary(docStatusRes.data.summary);
-        }
-    };
-
     const handleRetryInvoice = async (driveFileId: string, ocrStatus: string) => {
         if (!userId) return;
 
-        setRetrying(driveFileId);
-        try {
-            if (ocrStatus === "PENDING") {
-                const { data, response } = await api.processDocuments(userId);
-                if (response.ok && data.success) {
-                    await loadStatus();
-                } else {
-                    throw new Error(data.message || "Failed to start processing");
-                }
-            } else {
-                const { data, response } = await retryDocumentsSecure(userId, undefined, [driveFileId]);
-                if (response.ok && data.success) {
+        retryDocumentMutation.mutate(
+            { userId, driveFileId, ocrStatus },
+            {
+                onSuccess: (data) => {
                     toast({ description: data.message || "Document retry queued." });
-                    await loadStatus();
-                } else {
-                    throw new Error(data.message || "Failed to retry document");
-                }
+                },
+                onError: (error) => {
+                    toast({ description: error.message || "Could not process the document." });
+                },
             }
-        } catch (error: any) {
-            toast({ description: error.message || "Could not process the document." });
-        } finally {
-            setRetrying(null);
-        }
+        );
     };
 
     const handleRetryAllFailed = async () => {
         if (!userId) return;
-        setRetrying("all-failed");
-        try {
-            const { data, response } = await retryDocumentsSecure(userId);
-            if (response.ok && data.success) {
+
+        retryAllFailedMutation.mutate(userId, {
+            onSuccess: (data) => {
                 toast({ description: `Retried ${data.retried} documents.` });
-                await loadStatus();
-            } else {
-                throw new Error(data.message || "Failed to retry documents");
-            }
-        } catch (error: any) {
-            toast({ description: error.message || "Could not retry documents." });
-        } finally {
-            setRetrying(null);
-        }
+            },
+            onError: (error) => {
+                toast({ description: error.message || "Could not retry documents." });
+            },
+        });
     };
 
     const handleSyncToAI = async () => {
         if (!userId) return;
-        setSyncing(true);
-        try {
-            const { data, response } = await api.syncChatDocuments(userId);
-            if (response.ok) {
+
+        syncToAIMutation.mutate(userId, {
+            onSuccess: (data) => {
                 toast({ description: data.message || "Synced to AI knowledge base." });
-                await loadStatus(); // Refresh to show updated indexed status
-            } else {
-                throw new Error((data as any).message || "Failed to sync to AI");
-            }
-        } catch (error: any) {
-            toast({ description: error.message || "Could not sync to AI." });
-        } finally {
-            setSyncing(false);
-        }
+            },
+            onError: (error) => {
+                toast({ description: error.message || "Could not sync to AI." });
+            },
+        });
     };
 
     const handleRetryJob = async (jobId: string) => {
-        setRetrying(jobId);
-        try {
-            const { data, response } = await retryProcessingJob(jobId);
-            if (response.ok) {
-                toast({ description: "Job queued for retry." });
-                await loadStatus();
-            } else {
-                throw new Error("Failed to retry job");
+        if (!userId) return;
+
+        retryJobMutation.mutate(
+            { jobId, userId },
+            {
+                onSuccess: () => {
+                    toast({ description: "Job queued for retry." });
+                },
+                onError: (error) => {
+                    toast({ description: error.message || "Could not retry the job." });
+                },
             }
-        } catch (error: any) {
-            toast({ description: error.message || "Could not retry the job." });
-        } finally {
-            setRetrying(null);
-        }
+        );
     };
 
     const getOcrStatusBadge = (status: string) => {
@@ -271,7 +169,7 @@ export default function ProcessingStatus() {
         );
     };
 
-    if (loading) {
+    if (isLoading) {
         return (
             <div className="container py-8 space-y-6">
                 <Skeleton className="h-12 w-64" />
@@ -296,17 +194,22 @@ export default function ProcessingStatus() {
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-3xl font-bold">Processing Status</h1>
-                    <p className="text-muted-foreground">Monitor document processing and AI indexing</p>
+                    <p className="text-muted-foreground">
+                        Monitor document processing and AI indexing
+                        {isProcessing && (
+                            <span className="ml-2 text-xs text-primary">(auto-refreshing)</span>
+                        )}
+                    </p>
                 </div>
                 <div className="flex gap-2">
                     {summary && summary.pendingIndex > 0 && (
-                        <Button onClick={handleSyncToAI} disabled={syncing} variant="default">
-                            {syncing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
+                        <Button onClick={handleSyncToAI} disabled={syncToAIMutation.isPending} variant="default">
+                            {syncToAIMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />}
                             Sync to AI ({summary.pendingIndex})
                         </Button>
                     )}
-                    <Button onClick={loadStatus} variant="outline">
-                        <RefreshCw className="h-4 w-4 mr-2" />
+                    <Button onClick={() => refetch()} variant="outline" disabled={isFetching}>
+                        <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
                         Refresh
                     </Button>
                 </div>
@@ -377,8 +280,17 @@ export default function ProcessingStatus() {
                                         <XCircle className="h-5 w-5 text-red-600" />
                                         {summary.failed} Failed Documents
                                     </div>
-                                    <Button size="sm" onClick={handleRetryAllFailed} disabled={retrying === "all-failed"} variant="outline">
-                                        {retrying === "all-failed" ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                                    <Button 
+                                        size="sm" 
+                                        onClick={handleRetryAllFailed} 
+                                        disabled={retryAllFailedMutation.isPending} 
+                                        variant="outline"
+                                    >
+                                        {retryAllFailedMutation.isPending ? (
+                                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                        ) : (
+                                            <RefreshCw className="h-4 w-4 mr-2" />
+                                        )}
                                         Retry All Failed
                                     </Button>
                                 </CardTitle>
@@ -424,8 +336,17 @@ export default function ProcessingStatus() {
                                                 </div>
                                                 <div className="flex gap-2">
                                                     {(doc.ocrStatus === "FAILED" || doc.ocrStatus === "PENDING") && (
-                                                        <Button size="sm" variant="outline" onClick={() => handleRetryInvoice(doc.driveFileId, doc.ocrStatus)} disabled={retrying === doc.driveFileId}>
-                                                            {retrying === doc.driveFileId ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                                                        <Button 
+                                                            size="sm" 
+                                                            variant="outline" 
+                                                            onClick={() => handleRetryInvoice(doc.driveFileId, doc.ocrStatus)} 
+                                                            disabled={retryDocumentMutation.isPending && retryDocumentMutation.variables?.driveFileId === doc.driveFileId}
+                                                        >
+                                                            {retryDocumentMutation.isPending && retryDocumentMutation.variables?.driveFileId === doc.driveFileId ? (
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                            ) : (
+                                                                <RefreshCw className="h-4 w-4 mr-1" />
+                                                            )}
                                                             {doc.ocrStatus === "PENDING" ? "Process" : "Retry"}
                                                         </Button>
                                                     )}
@@ -486,8 +407,17 @@ export default function ProcessingStatus() {
                                                         </TableCell>
                                                         <TableCell>
                                                             {job.status === "FAILED" && job.retryCount < job.maxRetries && (
-                                                                <Button size="sm" variant="outline" onClick={() => handleRetryJob(job.jobId)} disabled={retrying === job.jobId}>
-                                                                    {retrying === job.jobId ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                                                                <Button 
+                                                                    size="sm" 
+                                                                    variant="outline" 
+                                                                    onClick={() => handleRetryJob(job.jobId)} 
+                                                                    disabled={retryJobMutation.isPending && retryJobMutation.variables?.jobId === job.jobId}
+                                                                >
+                                                                    {retryJobMutation.isPending && retryJobMutation.variables?.jobId === job.jobId ? (
+                                                                        <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                                                                    ) : (
+                                                                        <RefreshCw className="h-4 w-4 mr-2" />
+                                                                    )}
                                                                     Retry
                                                                 </Button>
                                                             )}
