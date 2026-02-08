@@ -3,6 +3,7 @@ import { fetchEmailsController, getScheduledJobsController, cancelScheduledJobCo
 import { getInvoicesByVendor, getVendorsByUser, getVendorMaster } from "../controllers/driveController.js";
 import { getUserSyncStatus, resetUserSyncStatus, disconnectGoogleAccount } from "../controllers/userController.js";
 import { processDocuments, getDocumentStatus, retryDocuments, getPendingDocuments } from "../controllers/documentController.js";
+import { resetEmailSync, resetOcrProcessing, resetAiDatabase, hardReset } from "../controllers/resetController.js";
 
 const router = express.Router();
 
@@ -278,6 +279,41 @@ router.get("/documents/status/:userId", getDocumentStatus);
  *   - driveFileIds (optional): array - Specific file IDs to retry
  */
 router.post("/documents/retry", retryDocuments);
+
+// ===============================================
+// RESET APIs - Data Management
+// ===============================================
+
+/**
+ * @route   DELETE /api/v1/reset/:userId/email-sync
+ * @desc    Reset email sync - Clear processing jobs + reset lastSyncedAt
+ * @access  Public (requires valid userId)
+ */
+router.delete("/reset/:userId/email-sync", resetEmailSync);
+
+/**
+ * @route   DELETE /api/v1/reset/:userId/ocr-processing
+ * @desc    Reset OCR processing - Set all documents ocrStatus = PENDING
+ * @access  Public (requires valid userId)
+ */
+router.delete("/reset/:userId/ocr-processing", resetOcrProcessing);
+
+/**
+ * @route   DELETE /api/v1/reset/:userId/ai-database
+ * @desc    Reset AI database - Clear indexed flags in MongoDB
+ * @access  Public (requires valid userId)
+ * @note    Call chat-service DELETE /user/{userId}/data to also clear VectorDB
+ */
+router.delete("/reset/:userId/ai-database", resetAiDatabase);
+
+/**
+ * @route   POST /api/v1/reset/:userId/hard-reset
+ * @desc    Hard reset - Delete all user data including Drive folders
+ * @access  Public (requires valid userId + confirmation)
+ * @body    { confirmDelete: true }
+ * @warning This permanently deletes all data and cannot be undone
+ */
+router.post("/reset/:userId/hard-reset", hardReset);
 
 export default router;
 

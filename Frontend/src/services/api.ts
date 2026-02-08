@@ -897,6 +897,87 @@ export async function clearInvoiceProcessingStatus(userId: string) {
   );
 }
 
+// ===============================================
+// RESET APIs
+// ===============================================
+
+export async function resetEmailSync(userId: string) {
+  return apiCall<{ success: boolean; message: string; details: { processingJobsDeleted: number; syncStatusReset: boolean } }>(
+    `/email/api/v1/reset/${userId}/email-sync`,
+    { method: "DELETE" }
+  );
+}
+
+export async function resetOcrProcessing(userId: string) {
+  return apiCall<{ success: boolean; message: string; details: { documentsReset: number } }>(
+    `/email/api/v1/reset/${userId}/ocr-processing`,
+    { method: "DELETE" }
+  );
+}
+
+export async function resetAiDatabase(userId: string) {
+  // This calls both email-storage (reset indexed flags) and chat-service (clear vectorDB)
+  const [emailResult, chatResult] = await Promise.all([
+    apiCall<{ success: boolean; message: string; details: { documentsReset: number } }>(
+      `/email/api/v1/reset/${userId}/ai-database`,
+      { method: "DELETE" }
+    ),
+    apiCall<{ success: boolean; message: string; mongodbDocsReset: number }>(
+      `/chat/api/v1/user/${userId}/data`,
+      { method: "DELETE" }
+    )
+  ]);
+  
+  return {
+    data: {
+      success: emailResult.data.success && chatResult.data.success,
+      message: "AI database reset successfully",
+      details: {
+        documentsReset: emailResult.data.details?.documentsReset || 0,
+        vectorDbCleared: chatResult.data.success,
+        mongodbDocsReset: chatResult.data.mongodbDocsReset || 0
+      }
+    },
+    response: emailResult.response
+  };
+}
+
+export async function hardReset(userId: string, confirmDelete: boolean = false) {
+  // First call email-storage hard reset
+  const emailResult = await apiCall<{ 
+    success: boolean; 
+    message: string; 
+    details: { 
+      processingJobsDeleted: number;
+      documentsDeleted: number;
+      syncStatusReset: boolean;
+      driveFoldersDeleted: number;
+      driveError: string | null;
+    };
+    note: string;
+  }>(
+    `/email/api/v1/reset/${userId}/hard-reset`,
+    { 
+      method: "POST",
+      body: JSON.stringify({ confirmDelete })
+    }
+  );
+
+  // If email reset succeeded, also clear chat/vector data
+  if (emailResult.data.success) {
+    try {
+      await apiCall(
+        `/chat/api/v1/user/${userId}/data`,
+        { method: "DELETE" }
+      );
+    } catch (e) {
+      console.warn("Failed to clear chat data during hard reset:", e);
+    }
+  }
+
+  return emailResult;
+}
+
 export const api = {
   // Auth
   getGoogleAuthUrl,
@@ -939,6 +1020,12 @@ export const api = {
   getAnalytics,
   loadChatKnowledge,
   getChatVendorSummary,
+
+  // Reset APIs
+  resetEmailSync,
+  resetOcrProcessing,
+  resetAiDatabase,
+  hardReset,
 };
 
 export default api;
