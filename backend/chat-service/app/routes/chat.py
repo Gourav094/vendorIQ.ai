@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Path
 from pydantic import BaseModel
 from typing import Optional
 from app.core.orchestrator import VendorKnowledgeOrchestrator
-from app.db import get_unindexed_documents, mark_documents_indexed, get_user_document_stats
+from app.db import get_unindexed_documents, mark_documents_indexed, mark_documents_indexed_by_sha256, get_user_document_stats
 import httpx
 
 router = APIRouter(tags=["Chat Service"])
@@ -39,6 +39,7 @@ class SyncRequest(BaseModel):
 class SyncResponse(BaseModel):
     success: bool
     documentsIndexed: int
+    documentsSkipped: int
     message: str
 
 
@@ -49,8 +50,8 @@ async def sync_documents(request: SyncRequest):
     
     Flow:
     1. Query MongoDB for documents where ocr_status=COMPLETED and indexed=false
-    2. For each vendor, fetch master.json from email-storage-service
-    3. Create embeddings with user_id in metadata
+    2. Check vector DB for already indexed sha256 hashes (skip expensive embedding)
+    3. For new documents, fetch master.json and create embeddings
     4. Store in vector DB (user isolated)
     5. Mark documents as indexed in MongoDB
     """
@@ -59,22 +60,56 @@ async def sync_documents(request: SyncRequest):
     if not user_id:
         raise HTTPException(status_code=400, detail="userId is required")
     
-    # Get unindexed documents from MongoDB
+    # Get unindexed documents from MongoDB (includes sha256)
     unindexed = get_unindexed_documents(user_id)
     
     if not unindexed:
         return SyncResponse(
             success=True,
             documentsIndexed=0,
-            message="No documents pending indexing"
+            documentsSkipped=0,
+            message="No documents pending to index"
         )
     
     orchestrator = get_orchestrator()
+    
+    # Get already indexed sha256 hashes from vector DB (EARLY CHECK - avoid expensive embedding)
+    indexed_hashes = orchestrator.vector_db.get_indexed_sha256_hashes(user_id)
+    print(f"Found {len(indexed_hashes)} already indexed sha256 hashes in vector DB")
+    
+    # Separate documents: already indexed (by content) vs truly new
+    already_indexed_docs = []
+    new_docs = []
+    
+    for doc in unindexed:
+        sha256 = doc.get("sha256")
+        if sha256 and sha256 in indexed_hashes:
+            already_indexed_docs.append(doc)
+        else:
+            new_docs.append(doc)
+    
+    print(f"Documents: {len(already_indexed_docs)} already in vector DB (by sha256), {len(new_docs)} new to index")
+    
+    # Mark already-indexed documents in MongoDB (skip embedding entirely)
+    if already_indexed_docs:
+        sha256_list = [doc.get("sha256") for doc in already_indexed_docs if doc.get("sha256")]
+        marked = mark_documents_indexed_by_sha256(user_id, sha256_list)
+        print(f"✓ Marked {marked} documents as indexed (content already in vector DB)")
+    
+    # If no new documents, we're done
+    if not new_docs:
+        return SyncResponse(
+            success=True,
+            documentsIndexed=0,
+            documentsSkipped=len(already_indexed_docs),
+            message=f"All {len(already_indexed_docs)} documents already indexed (by content hash)"
+        )
+    
     indexed_file_ids = []
     
-    # Group documents by vendor for batch processing
+    # Group NEW documents by vendor for batch processing
     vendors_data = {}
-    for doc in unindexed:
+    for doc in new_docs:
         vendor_name = doc.get("vendorName", "Unknown")
         vendor_folder_id = doc.get("vendorFolderId")
         
@@ -89,7 +124,7 @@ async def sync_documents(request: SyncRequest):
             }
         vendors_data[vendor_name]["docs"].append(doc)
     
-    print(f"Found {len(vendors_data)} vendors with {len(unindexed)} unindexed documents")
+    print(f"Processing {len(vendors_data)} vendors with {len(new_docs)} new documents")
     
     # Process each vendor's documents
     for vendor_name, vendor_info in vendors_data.items():
@@ -109,7 +144,7 @@ async def sync_documents(request: SyncRequest):
                 {"vendorName": vendor_name, "records": master_records}
             ])
             
-            # Index into vector DB with user_id 
+            # Index into vector DB with user_id
             result = orchestrator.process_direct_dataset(dataset, user_id, incremental=False)
             
             if result.get("success"):
@@ -124,14 +159,15 @@ async def sync_documents(request: SyncRequest):
             traceback.print_exc()
             continue
     
-    # Update MongoDB
+    # Update MongoDB for newly indexed documents
     if indexed_file_ids:
         mark_documents_indexed(user_id, indexed_file_ids)
     
     return SyncResponse(
         success=True,
         documentsIndexed=len(indexed_file_ids),
-        message=f"Indexed {len(indexed_file_ids)} documents from {len(vendors_data)} vendors"
+        documentsSkipped=len(already_indexed_docs),
+        message=f"Indexed {len(indexed_file_ids)} new documents, skipped {len(already_indexed_docs)}"
     )
 
 

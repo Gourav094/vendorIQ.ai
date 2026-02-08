@@ -2,7 +2,7 @@ import express from "express";
 import { fetchEmailsController, getScheduledJobsController, cancelScheduledJobController } from "../controllers/emailController.js";
 import { getInvoicesByVendor, getVendorsByUser, getVendorMaster } from "../controllers/driveController.js";
 import { getUserSyncStatus, resetUserSyncStatus, disconnectGoogleAccount } from "../controllers/userController.js";
-import { processDocuments, getDocumentStatus, retryDocuments } from "../controllers/documentController.js";
+import { processDocuments, getDocumentStatus, retryDocuments, getPendingDocuments } from "../controllers/documentController.js";
 
 const router = express.Router();
 
@@ -246,6 +246,13 @@ router.get("/emails/schedule/:userId", getScheduledJobsController);
 router.delete("/emails/schedule/:userId/:jobId", cancelScheduledJobController);
 
 // Simple document processing endpoints
+
+/**
+ * @route   GET /api/v1/documents/pending/:userId
+ * @desc    Get pending documents count and list for a user
+ * @access  Public
+ */
+router.get("/documents/pending/:userId", getPendingDocuments);
 
 /**
  * @route   POST /api/v1/documents/process

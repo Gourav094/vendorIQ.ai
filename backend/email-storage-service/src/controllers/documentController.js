@@ -1,6 +1,6 @@
 import axios from "axios";
 import GoogleIntegration from "../models/GoogleIntegration.js";
-import ProcessedAttachment from "../models/ProcessedAttachment.js";
+import Document from "../models/Document.js";
 import logger from "../utils/logger.js";
 
 const OCR_BASE_URL = process.env.OCR_SERVICE_BASE_URL || "http://localhost:4003";
@@ -32,12 +32,13 @@ export const processDocuments = async (req, res) => {
             });
         }
 
-        // Get all unprocessed attachments for this user
-        const attachments = await ProcessedAttachment.find({
-            userId: userId // auth_user_id
+        // Get all pending documents for this user (using Document model)
+        const documents = await Document.find({
+            userId: userId,
+            ocrStatus: "PENDING"
         }).sort({ createdAt: -1 });
 
-        if (attachments.length === 0) {
+        if (documents.length === 0) {
             return res.status(200).json({
                 success: true,
                 message: "No documents to process",
@@ -48,22 +49,22 @@ export const processDocuments = async (req, res) => {
 
         // Group by vendor
         const vendorGroups = {};
-        for (const att of attachments) {
-            const vendorKey = att.vendorFolderId || att.vendor || "Unknown";
+        for (const doc of documents) {
+            const vendorKey = doc.vendorFolderId || doc.vendorName || "Unknown";
             if (!vendorGroups[vendorKey]) {
                 vendorGroups[vendorKey] = {
-                    vendorName: att.vendor,
-                    vendorFolderId: att.vendorFolderId,
-                    invoiceFolderId: att.invoiceFolderId,
+                    vendorName: doc.vendorName,
+                    vendorFolderId: doc.vendorFolderId,
+                    invoiceFolderId: doc.invoiceFolderId,
                     invoices: []
                 };
             }
             vendorGroups[vendorKey].invoices.push({
-                fileId: att.driveFileId,
-                fileName: att.fileName,
+                fileId: doc.driveFileId,
+                fileName: doc.fileName,
                 mimeType: "application/pdf",
-                webViewLink: att.webViewLink,
-                webContentLink: att.webContentLink
+                webViewLink: doc.webViewLink,
+                webContentLink: doc.webContentLink
             });
         }
 
@@ -125,7 +126,7 @@ export const processDocuments = async (req, res) => {
         return res.status(200).json({
             success: true,
             message: `Processing started for ${totalQueued} vendor${totalQueued !== 1 ? 's' : ''}`,
-            totalDocuments: attachments.length,
+            totalDocuments: documents.length,
             vendorsProcessed: totalQueued,
             vendorsFailed: totalFailed,
             results
@@ -157,7 +158,7 @@ export const getDocumentStatus = async (req, res) => {
         }
 
         // Get all attachments for this user
-        const attachments = await ProcessedAttachment.find({
+        const attachments = await Document.find({
             userId
         }).sort({ createdAt: -1 }).limit(100);
 
@@ -178,7 +179,7 @@ export const getDocumentStatus = async (req, res) => {
         const documents = attachments.map(att => ({
             fileId: att.driveFileId,
             filename: att.fileName,
-            vendor: att.vendor,
+            vendor: att.vendorName,
             status: "pending", // Will be enhanced with actual status
             uploadedAt: att.createdAt,
             webViewLink: att.webViewLink
@@ -213,6 +214,49 @@ export const getDocumentStatus = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Failed to get document status",
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Get pending documents count for a user
+ * Returns count of documents with ocrStatus: PENDING
+ */
+export const getPendingDocuments = async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        if (!userId) {
+            return res.status(400).json({
+                success: false,
+                message: "userId is required"
+            });
+        }
+
+        // Get pending documents from MongoDB
+        const pendingDocs = await Document.find({
+            userId,
+            ocrStatus: "PENDING"
+        }).select("driveFileId fileName vendorName createdAt").sort({ createdAt: -1 }).limit(100);
+
+        return res.status(200).json({
+            success: true,
+            userId,
+            count: pendingDocs.length,
+            documents: pendingDocs.map(doc => ({
+                fileId: doc.driveFileId,
+                filename: doc.fileName,
+                vendor: doc.vendorName,
+                createdAt: doc.createdAt
+            }))
+        });
+
+    } catch (error) {
+        logger.error("Error getting pending documents", { error: error.message });
+        return res.status(500).json({
+            success: false,
+            message: "Failed to get pending documents",
             error: error.message
         });
     }

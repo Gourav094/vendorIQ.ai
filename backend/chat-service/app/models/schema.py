@@ -19,6 +19,7 @@ class Invoice(BaseModel):
     processed_at: Optional[str] = ""
     web_view_link: Optional[str] = ""
     web_content_link: Optional[str] = ""
+    sha256: Optional[str] = ""  # Content hash for deduplication
 
 class Vendor(BaseModel):
     vendor_name: str

@@ -32,6 +32,7 @@ def get_unindexed_documents(user_id: str) -> list:
     """
     Get documents that completed OCR but not yet indexed.
     Called during sync to find what needs indexing.
+    Returns documents with sha256 for deduplication check.
     """
     db = get_db()
     docs = db["documents"]
@@ -39,6 +40,13 @@ def get_unindexed_documents(user_id: str) -> list:
         "userId": user_id,
         "ocrStatus": "COMPLETED",
         "indexed": False
+    }, {
+        "_id": 1,
+        "driveFileId": 1,
+        "vendorName": 1,
+        "vendorFolderId": 1,
+        "fileName": 1,
+        "sha256": 1,
     }))
 
 
@@ -53,6 +61,29 @@ def mark_documents_indexed(user_id: str, drive_file_ids: list) -> int:
     now = datetime.now(timezone.utc)
     result = docs.update_many(
         {"userId": user_id, "driveFileId": {"$in": drive_file_ids}},
+        {
+            "$set": {
+                "indexed": True,
+                "indexedAt": now,
+                "updatedAt": now,
+            },
+            "$inc": {"indexVersion": 1}
+        }
+    )
+    return result.modified_count
+
+
+def mark_documents_indexed_by_sha256(user_id: str, sha256_list: list) -> int:
+    """
+    Mark documents as indexed by their sha256 hash.
+    Used when content already exists in vector DB.
+    """
+    db = get_db()
+    docs = db["documents"]
+    
+    now = datetime.now(timezone.utc)
+    result = docs.update_many(
+        {"userId": user_id, "sha256": {"$in": sha256_list}},
         {
             "$set": {
                 "indexed": True,
