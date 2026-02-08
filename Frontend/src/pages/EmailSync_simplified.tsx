@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import api, { type SyncStatus } from "@/services/api";
+import api, { type SyncStatus, type PendingDocumentsResponse } from "@/services/api";
 
 export default function EmailSync() {
     const { toast } = useToast();
@@ -39,10 +39,8 @@ export default function EmailSync() {
     const [isConnected, setIsConnected] = useState(false);
     const [isFetching, setIsFetching] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [fetchedDocuments, setFetchedDocuments] = useState<any[]>(() => {
-        const stored = localStorage.getItem("fetchedDocuments");
-        return stored ? JSON.parse(stored) : [];
-    });
+    const [pendingDocuments, setPendingDocuments] = useState<PendingDocumentsResponse["documents"]>([]);
+    const [isLoadingPending, setIsLoadingPending] = useState(false);
     const [statusMessage, setStatusMessage] = useState("");
     const [activityLogs, setActivityLogs] = useState<string[]>([]);
     const [isResetting, setIsResetting] = useState(false);
@@ -53,18 +51,37 @@ export default function EmailSync() {
     }, [fromDate]);
     useEffect(() => { localStorage.setItem("emailSyncVendorEmails", vendorEmails); }, [vendorEmails]);
     useEffect(() => { localStorage.setItem("emailSyncForceSync", String(forceSync)); }, [forceSync]);
-    useEffect(() => { localStorage.setItem("fetchedDocuments", JSON.stringify(fetchedDocuments)); }, [fetchedDocuments]);
 
-    // Check sync status on mount - use user ID from authenticated user
+    // Check sync status and pending documents on mount
     useEffect(() => {
         if (user?.id) {
             fetchSyncStatus();
+            fetchPendingDocuments();
         }
     }, [user?.id]);
 
     const addLog = (message: string) => {
         const timestamp = new Date().toLocaleTimeString();
         setActivityLogs(prev => [`[${timestamp}] ${message}`, ...prev].slice(0, 50));
+    };
+
+    const fetchPendingDocuments = async () => {
+        if (!user?.id) return;
+
+        setIsLoadingPending(true);
+        try {
+            const { data, response } = await api.getPendingDocuments(user.id);
+            if (response.ok && data.success) {
+                setPendingDocuments(data.documents);
+                if (data.count > 0) {
+                    addLog(`Found ${data.count} documents pending OCR processing`);
+                }
+            }
+        } catch (error) {
+            console.error("Failed to fetch pending documents:", error);
+        } finally {
+            setIsLoadingPending(false);
+        }
     };
 
     const fetchSyncStatus = async () => {
@@ -74,7 +91,6 @@ export default function EmailSync() {
         }
 
         try {
-            // Use the authenticated user's ID directly (same ID across both services now!)
             const { data, response } = await api.getUserSyncStatus(user.id);
             if (response.ok) {
                 setSyncStatus(data);
@@ -96,9 +112,7 @@ export default function EmailSync() {
     const handleResetSync = async () => {
         if (!user?.id) {
             toast({
-                title: "Not Connected",
                 description: "Please log in first",
-                variant: "destructive",
             });
             return;
         }
@@ -107,15 +121,13 @@ export default function EmailSync() {
         addLog("Resetting sync status...");
 
         try {
-            // Reset sync status and clear invoice processing records
             const [syncResponse] = await Promise.all([
                 api.resetUserSyncStatus(user.id),
                 api.clearInvoiceProcessingStatus(user.id)
             ]);
 
             if (syncResponse.response.ok) {
-                setFetchedDocuments([]);
-                localStorage.removeItem("fetchedDocuments");
+                setPendingDocuments([]);
                 
                 toast({ title: "Success", description: "Sync status reset successfully" });
                 addLog("Sync status reset successfully");
@@ -138,25 +150,20 @@ export default function EmailSync() {
     const handleFetchEmails = async () => {
         if (!user?.id) {
             toast({
-                title: "Not Connected",
                 description: "Please log in first",
-                variant: "destructive",
             });
             return;
         }
 
         if (!fromDate) {
             toast({
-                title: "Missing Date",
                 description: "Please select a 'From Date'.",
-                variant: "destructive",
             });
             return;
         }
 
         setIsFetching(true);
         setStatusMessage("Fetching emails from Gmail...");
-        setFetchedDocuments([]);
         addLog(`Starting email fetch from ${new Date(fromDate).toLocaleDateString()}`);
         if (vendorEmails) addLog(`Filtering by vendors: ${vendorEmails}`);
         if (forceSync) addLog("Force sync enabled - ignoring last sync timestamp");
@@ -174,30 +181,25 @@ export default function EmailSync() {
             });
 
             if (result.status === "completed" && result.result) {
-                const docs = result.result.uploadedFiles || [];
-                setFetchedDocuments(docs);
-                setStatusMessage(`✅ Fetched ${result.result.filesUploaded} documents successfully`);
-                addLog(`✅ Successfully fetched ${result.result.filesUploaded} documents`);
-                addLog(`Vendors found: ${result.result.vendorsDetected?.join(", ") || "None"}`);
-                docs.forEach((doc: any, i: number) => {
-                    if (i < 5) addLog(`  - ${doc.vendor}: ${doc.filename}`);
-                });
-                if (docs.length > 5) addLog(`  ... and ${docs.length - 5} more documents`);
+                const newDocs = (result.result.uploadedFiles || []).filter((doc: any) => !doc.skipped);
+                const skippedCount = (result.result.uploadedFiles?.length || 0) - newDocs.length;
+                
+                setStatusMessage(`Fetched ${newDocs.length} new documents successfully`);
+                addLog(`Successfully fetched ${newDocs.length} new documents (${skippedCount} skipped as duplicates)`);
+                
+                await fetchPendingDocuments();
 
                 toast({
-                    title: "Fetch Complete!",
-                    description: `${result.result.filesUploaded} documents ready for processing`,
+                    description: `${newDocs.length} new documents uploaded to Drive`,
                 });
             } else {
                 throw new Error("Fetch failed");
             }
         } catch (error) {
-            setStatusMessage("❌ Fetch failed");
+            setStatusMessage("Fetch failed");
             addLog(`❌ Error: ${error instanceof Error ? error.message : "Failed to fetch emails"}`);
             toast({
-                title: "Error",
                 description: error instanceof Error ? error.message : "Failed to fetch emails",
-                variant: "destructive",
             });
         } finally {
             setIsFetching(false);
@@ -216,22 +218,16 @@ export default function EmailSync() {
 
         setIsProcessing(true);
         setStatusMessage("Processing documents with OCR and AI...");
-        addLog(`Starting OCR processing for ${fetchedDocuments.length} documents...`);
+        addLog(`Starting OCR processing for ${pendingDocuments.length} documents...`);
 
         try {
             const { data, response } = await api.processDocuments(user.id);
 
             if (response.ok && data.success) {
-                // Clear from both state and localStorage before navigating
-                setFetchedDocuments([]);
-                localStorage.removeItem("fetchedDocuments");
-
                 toast({
-                    title: "Processing Started!",
                     description: `${data.totalDocuments} documents are being processed.`,
                 });
 
-                // Redirect to Processing Status page with invoices tab
                 navigate("/processing-status?tab=invoices");
             } else {
                 throw new Error(data.message || "Processing failed");
@@ -240,7 +236,6 @@ export default function EmailSync() {
             setStatusMessage("❌ Processing failed");
             addLog(`❌ Processing error: ${error instanceof Error ? error.message : "Unknown error"}`);
             toast({
-                title: "Error",
                 description: error instanceof Error ? error.message : "Failed to process documents",
                 variant: "destructive",
             });
@@ -258,7 +253,6 @@ export default function EmailSync() {
                 </p>
             </div>
 
-            {/* Connection Status */}
             <Card>
                 <CardHeader>
                     <div className="flex items-center justify-between">
@@ -316,9 +310,7 @@ export default function EmailSync() {
                 </CardHeader>
             </Card>
 
-            {/* Main Actions */}
             <div className="grid gap-6 md:grid-cols-2">
-                {/* Step 1: Fetch Emails */}
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
@@ -389,7 +381,6 @@ export default function EmailSync() {
                     </CardContent>
                 </Card>
 
-                {/* Step 2: Process Documents */}
                 <Card>
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
@@ -399,21 +390,26 @@ export default function EmailSync() {
                         <CardDescription>Extract data with OCR and index for AI queries</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        {fetchedDocuments.length > 0 ? (
+                        {isLoadingPending ? (
+                            <Alert>
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <AlertDescription>Loading pending documents...</AlertDescription>
+                            </Alert>
+                        ) : pendingDocuments.length > 0 ? (
                             <>
                                 <Alert>
                                     <FileText className="h-4 w-4" />
                                     <AlertDescription>
-                                        <strong>{fetchedDocuments.length} documents</strong> ready to process
+                                        <strong>{pendingDocuments.length} documents</strong> pending OCR processing
                                         <div className="mt-2 max-h-32 overflow-y-auto text-xs space-y-1">
-                                            {fetchedDocuments.slice(0, 5).map((doc, i) => (
+                                            {pendingDocuments.slice(0, 5).map((doc, i) => (
                                                 <div key={i} className="text-muted-foreground">
                                                     • {doc.vendor}: {doc.filename}
                                                 </div>
                                             ))}
-                                            {fetchedDocuments.length > 5 && (
+                                            {pendingDocuments.length > 5 && (
                                                 <div className="text-muted-foreground">
-                                                    ... and {fetchedDocuments.length - 5} more
+                                                    ... and {pendingDocuments.length - 5} more
                                                 </div>
                                             )}
                                         </div>
@@ -442,7 +438,7 @@ export default function EmailSync() {
                             <Alert>
                                 <AlertCircle className="h-4 w-4" />
                                 <AlertDescription>
-                                    No documents to process. Fetch emails first.
+                                    No documents pending for OCR. Try fetching new emails
                                 </AlertDescription>
                             </Alert>
                         )}
@@ -450,7 +446,6 @@ export default function EmailSync() {
                 </Card>
             </div>
 
-            {/* Status Message */}
             {statusMessage && (
                 <Alert>
                     <AlertCircle className="h-4 w-4" />
@@ -458,7 +453,6 @@ export default function EmailSync() {
                 </Alert>
             )}
 
-            {/* Activity Logs */}
             {activityLogs.length > 0 && (
                 <Card>
                     <CardHeader>

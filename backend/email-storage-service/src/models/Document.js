@@ -5,6 +5,7 @@ import mongoose from "mongoose";
  * Used by: Email Service, OCR Service, Chat Service
  * 
  * Tracks: file locations, OCR status, indexing status
+ * Also handles deduplication (merged from ProcessedAttachment)
  */
 const DocumentSchema = new mongoose.Schema(
   {
@@ -28,6 +29,9 @@ const DocumentSchema = new mongoose.Schema(
     webViewLink: { type: String },
     webContentLink: { type: String },
     
+    // Content hash for deduplication (sha256 of file content)
+    sha256: { type: String, index: true },
+
     // Email tracking (if source is email)
     gmailMessageId: { type: String },
     gmailAttachmentId: { type: String },
@@ -57,6 +61,9 @@ const DocumentSchema = new mongoose.Schema(
 // Compound indexes for common queries
 DocumentSchema.index({ userId: 1, ocrStatus: 1, indexed: 1 });
 DocumentSchema.index({ userId: 1, driveFileId: 1 }, { unique: true });
+
+// Deduplication index: prevent same content from same email being processed twice
+DocumentSchema.index({ userId: 1, gmailMessageId: 1, sha256: 1 }, { unique: true, sparse: true });
 
 // Update timestamp on save
 DocumentSchema.pre('save', function(next) {

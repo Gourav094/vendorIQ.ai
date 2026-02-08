@@ -383,6 +383,18 @@ export interface RetryInvoicesResponse {
   }>;
 }
 
+export interface PendingDocumentsResponse {
+  success: boolean;
+  userId: string;
+  count: number;
+  documents: Array<{
+    fileId: string;
+    filename: string;
+    vendor: string;
+    createdAt: string;
+  }>;
+}
+
 // ===============================================
 // Helper wrapper (always uses API Gateway)
 // ===============================================
@@ -632,6 +644,12 @@ export async function processDocuments(userId: string) {
     method: "POST",
     body: JSON.stringify({ userId }),
   });
+}
+
+export async function getPendingDocuments(userId: string) {
+  return apiCall<PendingDocumentsResponse>(
+    `/email/api/v1/documents/pending/${userId}`
+  );
 }
 
 export async function getDocumentStatus(userId: string) {
@@ -896,6 +914,7 @@ export const api = {
   getVendors,
   getInvoices,
   getVendorMaster,
+  getPendingDocuments,
 
   // Processing Jobs (NEW)
   getProcessingJob,

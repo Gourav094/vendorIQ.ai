@@ -4,7 +4,6 @@ import crypto from "crypto";
 
 import GoogleIntegration from "../models/GoogleIntegration.js";
 import { saveToDrive } from "./driveService.js";
-import ProcessedAttachment from "../models/ProcessedAttachment.js";
 import Document from "../models/Document.js";
 import { detectVendor } from "../utils/vendorDetection.js";
 import logger from "../utils/logger.js";
@@ -115,39 +114,50 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
         const lower = (part.filename || "").toLowerCase();
         const isAllowed = onlyPdf ? lower.endsWith(".pdf") : /\.(pdf|jpg|jpeg|png)$/.test(lower);
         if (!isAllowed) continue;
-        // Duplicate prevention: check registry first
-        const existing = await ProcessedAttachment.findOne({
+
+        // Fetch attachment content first to compute sha256 for deduplication
+        const attachment = await gmail.users.messages.attachments.get({
+          userId: "me",
+          messageId: msg.id,
+          id: part.body.attachmentId,
+        });
+        const fileBuffer = Buffer.from(attachment.data.data, "base64");
+
+        // Compute sha256 hash for content-based deduplication
+        let sha256 = null;
+        try {
+          const hash = crypto.createHash("sha256");
+          hash.update(fileBuffer);
+          sha256 = hash.digest("hex");
+        } catch (_) { }
+
+        // Duplicate prevention: check by userId + gmailMessageId + sha256
+        const existing = await Document.findOne({
           userId: integration.auth_user_id,
           gmailMessageId: msg.id,
-          gmailAttachmentId: part.body.attachmentId,
+          sha256: sha256,
         });
 
         let uploadResult;
-        let fileBuffer; // only fetch and decode if not already processed
         if (existing) {
-          logger.info("Reusing previously uploaded attachment", {
+          logger.info("Skipping duplicate attachment", {
             userId,
             vendor,
             filename: part.filename,
+            sha256,
             driveFileId: existing.driveFileId,
           });
           uploadResult = {
             fileId: existing.driveFileId,
             skipped: true,
             vendorFolderId: existing.vendorFolderId,
-            vendorFolderName: existing.vendor || vendor,
-            vendorDisplayName: existing.vendor || vendor,
+            vendorFolderName: existing.vendorName || vendor,
+            vendorDisplayName: existing.vendorName || vendor,
             invoiceFolderId: existing.invoiceFolderId,
             webViewLink: existing.webViewLink,
             webContentLink: existing.webContentLink,
           };
         } else {
-          const attachment = await gmail.users.messages.attachments.get({
-            userId: "me",
-            messageId: msg.id,
-            id: part.body.attachmentId,
-          });
-          fileBuffer = Buffer.from(attachment.data.data, "base64");
           try {
             uploadResult = await saveToDrive(integration, vendor, fileBuffer, part.filename);
           } catch (error) {
@@ -159,59 +169,43 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
             });
             continue;
           }
-          // Compute hash for possible future dedup across messages
-          let sha256 = null;
+
+          // Create Document record (single source of truth)
           try {
-            const hash = crypto.createHash("sha256");
-            hash.update(fileBuffer);
-            sha256 = hash.digest("hex");
-          } catch (_) { }
-          try {
-            await ProcessedAttachment.create({
+            await Document.create({
               userId: integration.auth_user_id,
-              gmailMessageId: msg.id,
-              gmailAttachmentId: part.body.attachmentId,
-              vendor,
-              fileName: part.filename,
               driveFileId: uploadResult.fileId,
+              fileName: part.filename,
+              vendorName: vendor,
               vendorFolderId: uploadResult.vendorFolderId,
               invoiceFolderId: uploadResult.invoiceFolderId,
               webViewLink: uploadResult.webViewLink,
               webContentLink: uploadResult.webContentLink,
+              source: "email",
+              gmailMessageId: msg.id,
+              gmailAttachmentId: part.body.attachmentId,
               sha256,
+              ocrStatus: "PENDING",
+              indexed: false,
+              indexVersion: 0,
+              createdAt: new Date(),
+              updatedAt: new Date(),
             });
-
-            // Create Document record for OCR/Chat tracking (ocrStatus: PENDING)
-            await Document.findOneAndUpdate(
-              { userId: integration.auth_user_id, driveFileId: uploadResult.fileId },
-              {
-                $set: {
-                  fileName: part.filename,
-                  vendorName: vendor,
-                  vendorFolderId: uploadResult.vendorFolderId,
-                  invoiceFolderId: uploadResult.invoiceFolderId,
-                  webViewLink: uploadResult.webViewLink,
-                  webContentLink: uploadResult.webContentLink,
-                  source: "email",
-                  gmailMessageId: msg.id,
-                  gmailAttachmentId: part.body.attachmentId,
-                  updatedAt: new Date(),
-                },
-                $setOnInsert: {
-                  userId: integration.auth_user_id,
-                  driveFileId: uploadResult.fileId,
-                  ocrStatus: "PENDING",
-                  indexed: false,
-                  indexVersion: 0,
-                  createdAt: new Date(),
-                }
-              },
-              { upsert: true }
-            );
-          } catch (regErr) {
-            logger.error("Failed to persist attachment registry", { regErr: regErr.message });
+          } catch (docErr) {
+            // Handle duplicate key error (race condition)
+            if (docErr.code === 11000) {
+              logger.info("Document already exists (race condition), skipping", {
+                userId,
+                vendor,
+                filename: part.filename,
+              });
+              uploadResult.skipped = true;
+            } else {
+              logger.error("Failed to create Document record", { error: docErr.message });
+            }
           }
         }
+
         const uploadInfo = {
           vendor,
           filename: part.filename,

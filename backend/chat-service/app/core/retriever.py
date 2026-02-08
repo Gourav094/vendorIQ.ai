@@ -420,3 +420,19 @@ class VectorDatabase:
         except Exception as e:
             print(f"Error deleting user data: {e}")
             return False
+
+    def get_indexed_sha256_hashes(self, user_id: str) -> set:
+        """Get all sha256 hashes already indexed for a user."""
+        try:
+            results = self.collection.get(
+                where={"user_id": user_id},
+                include=["metadatas"]
+            )
+            hashes = set()
+            for meta in results.get("metadatas", []):
+                if isinstance(meta, dict) and meta.get("sha256"):
+                    hashes.add(meta["sha256"])
+            return hashes
+        except Exception as e:
+            print(f"Error getting indexed sha256 hashes: {e}")
+            return set()

@@ -176,7 +176,13 @@ class VendorDataLoader:
                     invoice_number=str(invoice_number),
                     invoice_date=str(invoice_date),
                     total_amount=str(total_amount),
-                    line_items=line_items
+                    line_items=line_items,
+                    drive_file_id=invoice_data.get('drive_file_id') or '',
+                    file_name=invoice_data.get('file_name') or '',
+                    processed_at=invoice_data.get('processed_at') or '',
+                    web_view_link=invoice_data.get('web_view_link') or '',
+                    web_content_link=invoice_data.get('web_content_link') or '',
+                    sha256=invoice_data.get('sha256') or '',
                 )
                 invoices.append(invoice)
             
@@ -352,5 +358,6 @@ class VendorDataLoader:
                 "processed_at": getattr(invoice, 'processed_at', ''),
                 "web_view_link": getattr(invoice, 'web_view_link', ''),
                 "web_content_link": getattr(invoice, 'web_content_link', ''),
+                "sha256": getattr(invoice, 'sha256', ''),  # Content hash for deduplication
             }
         )
