@@ -50,28 +50,30 @@ export interface ProcessDocuments {
 }
 interface DocumentStatus {
   success: boolean;
-  message?: string;
   userId: string;
   summary: {
-    totalDocuments: number;
-    completed: number;
-    failed: number;
+    total: number;
     pending: number;
     processing: number;
+    completed: number;
+    failed: number;
+    indexed: number;
+    pendingIndex: number;
   };
   documents: Array<{
-    fileId: string;
-    filename: string;
-    vendor: string;
-    status: "pending" | "processing" | "completed" | "failed";
-    error?: string;
-    attempts?: number;
-    lastAttempt?: string;
-    webViewLink?: string;
+    driveFileId: string;
+    fileName: string;
+    vendorName: string;
+    ocrStatus: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+    indexed: boolean;
+    indexedAt: string | null;
+    ocrCompletedAt: string | null;
+    ocrError: string | null;
+    webViewLink: string;
+    webContentLink: string;
+    createdAt: string;
+    updatedAt: string;
   }>;
-  ocrStatus: {
-    by_status: string;
-  };
 }
 
 export interface Vendor {

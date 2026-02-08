@@ -143,8 +143,8 @@ export const processDocuments = async (req, res) => {
 };
 
 /**
- * Get simple document status for a user
- * Returns all documents with their processing status
+ * Get document status for a user from MongoDB (single source of truth)
+ * Returns all documents with OCR status and indexed status
  */
 export const getDocumentStatus = async (req, res) => {
     try {
@@ -157,56 +157,43 @@ export const getDocumentStatus = async (req, res) => {
             });
         }
 
-        // Get all attachments for this user
-        const attachments = await Document.find({
-            userId
-        }).sort({ createdAt: -1 }).limit(100);
+        // Get all documents from MongoDB (single source of truth)
+        const documents = await Document.find({ userId })
+            .sort({ createdAt: -1 })
+            .limit(200);
 
-        // For now, we'll query the OCR service for detailed status
-        // In the future, we'll have a unified status collection
-        let statusDetails = [];
-        try {
-            const ocrResponse = await axios.get(
-                `${OCR_BASE_URL}/api/v1/processing/status/summary?userId=${userId}`,
-                { timeout: 5000 }
-            );
-            statusDetails = ocrResponse.data;
-        } catch (error) {
-            logger.warn("Could not fetch OCR status", { error: error.message });
-        }
-
-        // Map attachments to simple status format
-        const documents = attachments.map(att => ({
-            fileId: att.driveFileId,
-            filename: att.fileName,
-            vendor: att.vendorName,
-            status: "pending", // Will be enhanced with actual status
-            uploadedAt: att.createdAt,
-            webViewLink: att.webViewLink
-        }));
-
+        // Calculate summary from actual MongoDB data
         const summary = {
-            totalDocuments: documents.length,
-            completed: 0,
-            failed: 0,
-            pending: documents.length,
-            processing: 0
+            total: documents.length,
+            pending: documents.filter(d => d.ocrStatus === "PENDING").length,
+            processing: documents.filter(d => d.ocrStatus === "PROCESSING").length,
+            completed: documents.filter(d => d.ocrStatus === "COMPLETED").length,
+            failed: documents.filter(d => d.ocrStatus === "FAILED").length,
+            indexed: documents.filter(d => d.indexed === true).length,
+            pendingIndex: documents.filter(d => d.ocrStatus === "COMPLETED" && !d.indexed).length,
         };
 
-        // If we have OCR status, merge it
-        if (statusDetails && statusDetails.by_status) {
-            summary.completed = statusDetails.by_status.COMPLETED || 0;
-            summary.failed = (statusDetails.by_status.OCR_FAILED || 0) + (statusDetails.by_status.CHAT_FAILED || 0);
-            summary.processing = (statusDetails.by_status.OCR_PROCESSING || 0) + (statusDetails.by_status.CHAT_INDEXING || 0);
-            summary.pending = statusDetails.by_status.PENDING || 0;
-        }
+        // Map documents to response format
+        const docs = documents.map(doc => ({
+            driveFileId: doc.driveFileId,
+            fileName: doc.fileName,
+            vendorName: doc.vendorName,
+            ocrStatus: doc.ocrStatus,
+            indexed: doc.indexed || false,
+            indexedAt: doc.indexedAt || null,
+            ocrCompletedAt: doc.ocrCompletedAt || null,
+            ocrError: doc.ocrError || null,
+            webViewLink: doc.webViewLink,
+            webContentLink: doc.webContentLink,
+            createdAt: doc.createdAt,
+            updatedAt: doc.updatedAt,
+        }));
 
         return res.status(200).json({
             success: true,
             userId,
             summary,
-            documents,
-            ocrStatus: statusDetails
+            documents: docs,
         });
 
     } catch (error) {
