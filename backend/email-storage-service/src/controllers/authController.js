@@ -5,7 +5,7 @@ import { config } from "../config/index.js";
 const oauth2Client = new google.auth.OAuth2(
   config.google.clientId || process.env.GOOGLE_CLIENT_ID,
   config.google.clientSecret || process.env.GOOGLE_CLIENT_SECRET,
-  config.google.redirectUri || process.env.GOOGLE_REDIRECT_URI
+  config.google.redirectUri || process.env.GOOGLE_EMAIL_REDIRECT_URI
 );
 
 const SCOPES = [

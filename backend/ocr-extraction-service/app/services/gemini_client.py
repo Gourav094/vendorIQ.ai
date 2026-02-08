@@ -10,8 +10,8 @@ load_dotenv()
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Profile configuration
-PROFILE = os.getenv("PROFILE", "production")
+# LLM Provider configuration
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 
 # Gemini configuration (production)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -24,15 +24,15 @@ LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "mistral:latest")
 
 def get_llm_client():
     """
-    Returns the appropriate LLM client based on PROFILE environment variable.
+    Returns the appropriate LLM client based on LLM_PROVIDER environment variable.
     
-    - PROFILE=local: Uses Ollama (mistral:latest) for local development
-    - PROFILE=production: Uses Google Gemini API
+    - LLM_PROVIDER=ollama: Uses Ollama (mistral:latest) for local development
+    - LLM_PROVIDER=gemini: Uses Google Gemini API
     
     Returns:
         dict: Configuration for the LLM client
     """
-    if PROFILE == "local":
+    if LLM_PROVIDER == "ollama":
         logging.info(f"Using local LLM: {LOCAL_LLM_MODEL} at {LOCAL_LLM_BASE_URL}")
         return {
             "type": "ollama",
@@ -41,7 +41,7 @@ def get_llm_client():
         }
     else:
         if not GEMINI_API_KEY:
-            raise ValueError("GEMINI_API_KEY not found for production profile")
+            raise ValueError("GEMINI_API_KEY not found for gemini provider")
         logging.info(f"Using Gemini API: {GEMINI_MODEL}")
         return {
             "type": "gemini",
@@ -176,7 +176,7 @@ def call_gemini(prompt: str, config: dict, max_retries: int = 3) -> dict:
 def extract_invoice_json_from_text(extracted_text: str, max_retries: int = 3):
     """
     Send extracted PDF text to LLM and receive structured invoice JSON.
-    Uses Ollama (local) or Gemini (production) based on PROFILE env variable.
+    Uses Ollama or Gemini based on LLM_PROVIDER env variable.
     
     Args:
         extracted_text: The text extracted from the invoice PDF

@@ -9,7 +9,7 @@ const verifyToken = require('./middleware/verifyToken');
 const { logger, requestLogger } = require('./middleware/logger');
 
 const app = express();
-const PORT = process.env.GATEWAY_PORT || 4000;
+const PORT = process.env.API_GATEWAY_PORT || 4000;
 const FRONTEND_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:8000';
 
 // Security & parsing

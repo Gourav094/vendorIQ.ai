@@ -83,10 +83,10 @@ Create a `.env` file in the project root and add:
 
 Example:
 ```
-FRONTEND_URL=http://localhost:5173
+FRONTEND_URL=http://localhost:8000
 GOOGLE_CLIENT_ID=xxx.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=xxx
-GOOGLE_REDIRECT_URI=http://localhost:4001/auth/callback
+GOOGLE_AUTH_REDIRECT_URI=http://localhost:4001/auth/callback
 SECRET_KEY=change_me
 JWT_SECRET=change_me_jwt
 JWT_ALGORITHM=HS256

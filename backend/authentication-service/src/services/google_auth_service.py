@@ -10,7 +10,7 @@ class GoogleAuthService:
     def __init__(self):
         self.client_id = os.getenv("GOOGLE_CLIENT_ID")
         self.client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-        self.redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+        self.redirect_uri = os.getenv("GOOGLE_AUTH_REDIRECT_URI")
 
         service_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.abspath(os.path.join(service_dir, "..", ".."))

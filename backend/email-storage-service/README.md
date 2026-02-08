@@ -84,7 +84,7 @@ PORT=4002
 MONGO_URI=mongodb+srv://<user>:<password>@<cluster>/<dbName>
 GOOGLE_CLIENT_ID=<your_google_client_id>
 GOOGLE_CLIENT_SECRET=<your_google_client_secret>
-GOOGLE_REDIRECT_URI=http://localhost:4002/auth/google/callback
+GOOGLE_EMAIL_REDIRECT_URI=http://localhost:4002/auth/google/callback
 OCR_SERVICE_BASE_URL=http://localhost:4003
 OCR_TRIGGER_TOKEN=<shared_secret>
 LOG_LEVEL=info
@@ -295,7 +295,7 @@ Stores OAuth tokens and connection status for each user's Google account:
 - Tokens are stored in MongoDB; in production consider encrypting refresh tokens at rest and adding OAuth `state` for CSRF protection
 
 ## Troubleshooting
-- Redirect URI mismatch: ensure Google Console Authorized redirect URI exactly matches `GOOGLE_REDIRECT_URI`
+- Redirect URI mismatch: ensure Google Console Authorized redirect URI exactly matches `GOOGLE_EMAIL_REDIRECT_URI`
 - No Gmail connected: ensure the user completed OAuth and has a `googleRefreshToken` in MongoDB
 - No files uploaded: check `onlyPdf` and ensure attachments exist and match the filters; confirm the Gmail search query is correct
 - MongoDB connectivity: verify `MONGO_URI` and network access
