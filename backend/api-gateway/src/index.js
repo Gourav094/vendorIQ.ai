@@ -1,9 +1,13 @@
+// Load global environment variables first
+const dotenv = require('dotenv');
+const { loadGlobalEnv } = require('../../config/load-env');
+loadGlobalEnv(dotenv);
+
 const express = require('express');
 const helmet = require('helmet');
 const cookieParser = require('cookie-parser');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-require('dotenv').config();
 const routes = require('./routes');
 const verifyToken = require('./middleware/verifyToken');
 const { logger, requestLogger } = require('./middleware/logger');

@@ -2,7 +2,14 @@ from flask import Flask
 from flask_cors import CORS
 from flasgger import Swagger
 import os, sys
-from dotenv import load_dotenv
+
+# Add backend directory to Python path to find config module
+from pathlib import Path
+backend_dir = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(backend_dir))
+
+# Load global environment variables
+from config.load_env import *
 
 # Ensure local src subpackages (controllers, services, routes) are importable even if run from project root
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -10,8 +17,6 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from controllers.auth_controller import auth_bp
-
-load_dotenv()
 
 app = Flask(__name__)
 CORS(app, supports_credentials=True)

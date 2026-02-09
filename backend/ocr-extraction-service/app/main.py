@@ -1,13 +1,19 @@
 import os
 from contextlib import asynccontextmanager
 
+# Add backend directory to Python path to find config module
+import sys
+from pathlib import Path
+backend_dir = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(backend_dir))
+
+# Load global environment variables
+from config.load_env import *
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
 
 from app.routes import base_routes, invoice_routes, pdf_ocr_routes, processing_routes, retry_routes, text_to_json
-
-load_dotenv()
 
 OCR_PORT = int(os.getenv("OCR_PORT", "4003"))
 INVOICES_JSON_FOLDER = os.getenv("INVOICES_JSON_FOLDER", "invoices_json")

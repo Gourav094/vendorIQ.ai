@@ -1,3 +1,8 @@
+// Load global environment variables first
+import dotenv from 'dotenv';
+import { loadGlobalEnv } from '../../config/load-env.js';
+loadGlobalEnv(dotenv);
+
 import express from "express";
 import cors from "cors";
 import { config } from "./config/index.js";

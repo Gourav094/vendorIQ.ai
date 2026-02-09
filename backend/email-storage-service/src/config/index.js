@@ -1,5 +1,7 @@
+// Load global environment variables first
 import dotenv from 'dotenv';
-dotenv.config();
+import { loadGlobalEnv } from '../../../config/load-env.js';
+loadGlobalEnv(dotenv);
 
 export const config = {
     port : process.env.PORT || 4002,
