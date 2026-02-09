@@ -1,8 +1,4 @@
 const winston = require('winston');
-const path = require('path');
-
-// Create logs directory path
-const logsDir = path.join(__dirname, '../../logs');
 
 // Define log format
 const logFormat = winston.format.combine(
@@ -18,7 +14,7 @@ const logger = winston.createLogger({
   format: logFormat,
   defaultMeta: { service: 'api-gateway' },
   transports: [
-    // Write all logs to console
+    // Write all logs to console only
     new winston.transports.Console({
       format: winston.format.combine(
         winston.format.colorize(),
@@ -27,25 +23,6 @@ const logger = winston.createLogger({
           return `${timestamp} [${level}]: ${message} ${metaStr}`;
         })
       )
-    }),
-    // Write all logs with level 'error' and below to error.log
-    new winston.transports.File({ 
-      filename: path.join(logsDir, 'error.log'), 
-      level: 'error',
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
-    }),
-    // Write all logs to combined.log
-    new winston.transports.File({ 
-      filename: path.join(logsDir, 'combined.log'),
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
-    }),
-    // Service-specific logs
-    new winston.transports.File({ 
-      filename: path.join(logsDir, 'gateway.log'),
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
     })
   ]
 });
