@@ -1,5 +1,6 @@
 import os
 from contextlib import asynccontextmanager
+import logging
 
 # Add backend directory to Python path to find config module
 import sys
@@ -15,7 +16,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import base_routes, invoice_routes, pdf_ocr_routes, processing_routes, retry_routes, text_to_json
 
-OCR_PORT = int(os.getenv("OCR_PORT", "4003"))
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger = logging.getLogger(__name__)
+
+OCR_PORT = int(os.getenv("OCR_SERVICE_PORT", "4003"))
 INVOICES_JSON_FOLDER = os.getenv("INVOICES_JSON_FOLDER", "invoices_json")
 PROCESSING_STATUS_DIR = os.getenv("PROCESSING_STATUS_DIR", "processing_status")
 
@@ -28,7 +38,9 @@ def ensure_folder_exists(path: str) -> None:
 async def lifespan(app: FastAPI):
     ensure_folder_exists(INVOICES_JSON_FOLDER)
     ensure_folder_exists(PROCESSING_STATUS_DIR)
+    logger.info(f"OCR Service initialized on port {OCR_PORT}")
     yield
+    logger.info("Shutting down OCR Service...")
 
 
 app = FastAPI(title="Invoice OCR Service", lifespan=lifespan)
@@ -47,7 +59,7 @@ app.include_router(pdf_ocr_routes.router, prefix=API_VERSION)
 app.include_router(text_to_json.router, prefix=API_VERSION)
 app.include_router(invoice_routes.router, prefix=API_VERSION)
 app.include_router(processing_routes.router)
-app.include_router(retry_routes.router)  # New retry endpoints
+app.include_router(retry_routes.router)
 
 
 @app.get("/")

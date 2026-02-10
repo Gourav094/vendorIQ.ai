@@ -2,18 +2,8 @@ import os
 import json
 import logging
 import time
-import sys
-from pathlib import Path
 
-# Add backend directory to Python path
-backend_dir = Path(__file__).resolve().parent.parent.parent.parent
-sys.path.insert(0, str(backend_dir))
-
-# Load global environment variables
-from config.load_env import *
-
-# Configure logging
-logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 # LLM Provider configuration
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
@@ -28,17 +18,9 @@ LOCAL_LLM_MODEL = os.getenv("LOCAL_LLM_MODEL", "mistral:latest")
 
 
 def get_llm_client():
-    """
-    Returns the appropriate LLM client based on LLM_PROVIDER environment variable.
-    
-    - LLM_PROVIDER=ollama: Uses Ollama (mistral:latest) for local development
-    - LLM_PROVIDER=gemini: Uses Google Gemini API
-    
-    Returns:
-        dict: Configuration for the LLM client
-    """
+    """Configuration for the LLM client"""
     if LLM_PROVIDER == "ollama":
-        logging.info(f"Using local LLM: {LOCAL_LLM_MODEL} at {LOCAL_LLM_BASE_URL}")
+        logger.info(f"Using local LLM: {LOCAL_LLM_MODEL} at {LOCAL_LLM_BASE_URL}")
         return {
             "type": "ollama",
             "base_url": LOCAL_LLM_BASE_URL,
@@ -47,7 +29,7 @@ def get_llm_client():
     else:
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY not found for gemini provider")
-        logging.info(f"Using Gemini API: {GEMINI_MODEL}")
+        logger.info(f"Using Gemini API: {GEMINI_MODEL}")
         return {
             "type": "gemini",
             "api_key": GEMINI_API_KEY,
@@ -179,17 +161,7 @@ def call_gemini(prompt: str, config: dict, max_retries: int = 3) -> dict:
 
 
 def extract_invoice_json_from_text(extracted_text: str, max_retries: int = 3):
-    """
-    Send extracted PDF text to LLM and receive structured invoice JSON.
-    Uses Ollama or Gemini based on LLM_PROVIDER env variable.
-    
-    Args:
-        extracted_text: The text extracted from the invoice PDF
-        max_retries: Maximum number of retry attempts
-    
-    Returns:
-        dict: Parsed invoice JSON or error dict with 'retryable' flag
-    """
+    """Send extracted PDF text to LLM and receive structured invoice JSON."""
     
     prompt = f"""Extract structured invoice information from the following text. 
 Return output ONLY in JSON format with these fields (no extra explanations):

@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 import httpx
-from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -14,15 +13,13 @@ from googleapiclient.http import MediaFileUpload
 
 from app.db import update_ocr_status
 
-load_dotenv()
-
 logger = logging.getLogger(__name__)
 
-EMAIL_BASE = os.getenv("EMAIL_SERVICE_BASE_URL", "http://localhost:4002")
+EMAIL_BASE = os.getenv("EMAIL_SERVICE_URL", "http://localhost:4002")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-OCR_PORT = int(os.getenv("OCR_PORT", "4003"))
-OCR_INTERNAL_BASE_URL = os.getenv("OCR_INTERNAL_BASE_URL", f"http://127.0.0.1:{OCR_PORT}")
+OCR_PORT = int(os.getenv("OCR_SERVICE_PORT", "4003"))
+OCR_INTERNAL_BASE_URL = os.getenv("OCR_SERVICE_URL", f"http://127.0.0.1:{OCR_PORT}")
 INVOICES_ROOT = os.getenv("INVOICES_JSON_FOLDER", "invoices_json")
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 

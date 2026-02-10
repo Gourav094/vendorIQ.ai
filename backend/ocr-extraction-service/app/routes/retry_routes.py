@@ -1,11 +1,7 @@
-"""
-Retry routes for OCR extraction service.
-Provides endpoints for querying processing status and retrying failed operations.
-"""
-from fastapi import APIRouter, HTTPException, Query, Header
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Optional, List
-import os
+import logging
 
 from app.services.retry_service import (
     get_processing_status,
@@ -16,14 +12,7 @@ from app.services.retry_service import (
 
 router = APIRouter(prefix="/api/v1/processing", tags=["Processing & Retry"])
 
-# Optional token-based authentication (same as processing_routes)
-OCR_TRIGGER_TOKEN = os.getenv("OCR_TRIGGER_TOKEN")
-
-
-def _validate_token(trigger_header: Optional[str]) -> None:
-    """Validate trigger token if configured"""
-    if OCR_TRIGGER_TOKEN and trigger_header != OCR_TRIGGER_TOKEN:
-        raise HTTPException(status_code=401, detail="Invalid trigger token")
+logger = logging.getLogger(__name__)
 
 
 class RetryRequest(BaseModel):
@@ -42,16 +31,8 @@ async def get_status_endpoint(
     vendorName: Optional[str] = Query(None, description="Filter by vendor name"),
     status: Optional[str] = Query(None, description="Filter by status (e.g., OCR_FAILED, CHAT_FAILED)"),
 ):
-    """
-    Get processing status for invoices.
-    
-    Returns detailed status information including:
-    - Current processing state
-    - Error details
-    - Retry attempts
-    - Timestamps
-    """
-    # No auth required for status checking - it's read-only and user-specific
+    """Get processing status for invoices with detailed information."""
+    logger.info(f"Getting status for user: {userId}, vendor: {vendorName}, status: {status}")
     
     result = await get_processing_status(
         user_id=userId,
@@ -70,15 +51,8 @@ async def get_summary_endpoint(
     userId: str = Query(..., description="User identifier"),
     vendorName: Optional[str] = Query(None, description="Filter by vendor name"),
 ):
-    """
-    Get a quick summary of processing status (counts by status).
-    
-    Useful for dashboard widgets showing:
-    - Total invoices processed
-    - Failed count
-    - Retryable count
-    """
-    # No auth required for summary - it's read-only and user-specific
+    """Get a quick summary of processing status (counts by status)."""
+    logger.info(f"Getting status summary for user: {userId}, vendor: {vendorName}")
     
     result = get_status_summary(user_id=userId, vendor_name=vendorName)
     
@@ -89,10 +63,7 @@ async def get_summary_endpoint(
 
 
 @router.post("/retry", summary="Retry Failed Invoice Processing")
-async def retry_endpoint(
-    request: RetryRequest,
-    trigger_header: Optional[str] = Header(None, alias="x-ocr-token"),
-):
+async def retry_endpoint(request: RetryRequest):
     """
     Retry failed OCR extraction and/or chat indexing operations.
     
@@ -101,13 +72,8 @@ async def retry_endpoint(
     2. Check retry limits
     3. Re-process failed invoices through the OCR → Chat pipeline
     4. Return detailed results
-    
-    Retries are intelligent:
-    - Only retries operations marked as retryable
-    - Respects max retry limits
-    - Handles partial failures gracefully
     """
-    _validate_token(trigger_header)
+    logger.info(f"Retrying failed invoices for user: {request.userId}, vendor: {request.vendorName}")
     
     result = await retry_failed_invoices(
         user_id=request.userId,
@@ -128,6 +94,8 @@ async def clear_status_endpoint(
     userId: str = Query(..., description="User identifier"),
 ):
     """Clear all processing status records for a user."""
+    logger.info(f"Clearing processing status for user: {userId}")
+    
     result = clear_user_documents(user_id=userId)
     
     if not result.get("success"):

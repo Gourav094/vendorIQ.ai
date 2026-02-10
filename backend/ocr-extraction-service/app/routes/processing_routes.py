@@ -1,14 +1,15 @@
 import os
 from typing import Any, Dict, List, Optional
+import logging
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.invoice_processor import process_all_invoices, process_vendor_invoices
 
 router = APIRouter(prefix="/api/v1/processing", tags=["Processing"], include_in_schema=False)
 
-OCR_TRIGGER_TOKEN = os.getenv("OCR_TRIGGER_TOKEN")
+logger = logging.getLogger(__name__)
 
 
 class InvoicePayload(BaseModel):
@@ -35,23 +36,16 @@ class FullSyncRequest(BaseModel):
     refreshToken: str = Field(..., description="Google OAuth refresh token for Drive access")
 
 
-def _validate_token(trigger_header: Optional[str]) -> None:
-    if OCR_TRIGGER_TOKEN and trigger_header != OCR_TRIGGER_TOKEN:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid trigger token")
-
-
 @router.post("/vendor", status_code=status.HTTP_200_OK)
-async def process_vendor(
-    payload: VendorProcessingRequest,
-    trigger_header: Optional[str] = Header(None, alias="x-ocr-token"),
-) -> Dict[str, Any]:
-    _validate_token(trigger_header)
-
+async def process_vendor(payload: VendorProcessingRequest) -> Dict[str, Any]:
+    """Process invoices for a specific vendor."""
     if not payload.invoices:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No invoices provided")
 
     if not payload.refreshToken:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing refresh token")
+
+    logger.info(f"Processing vendor: {payload.vendorName} (user: {payload.userId}, invoices: {len(payload.invoices)})")
 
     summary = await process_vendor_invoices(
         user_id=payload.userId,
@@ -61,19 +55,18 @@ async def process_vendor(
         vendor_folder_id=payload.vendorFolderId,
         refresh_token=payload.refreshToken,
     )
-    # Direct ingest now happens inside process_vendor_invoices; no additional knowledge load trigger here.
+    
     return {"status": "processed", "summary": summary}
 
 
 @router.post("/vendor/sync", status_code=status.HTTP_202_ACCEPTED)
-async def sync_vendor_invoices(
-    payload: FullSyncRequest,
-    trigger_header: Optional[str] = Header(None, alias="x-ocr-token"),
-) -> Dict[str, Any]:
-    _validate_token(trigger_header)
-
+async def sync_vendor_invoices(payload: FullSyncRequest) -> Dict[str, Any]:
+    """Process all invoices for all vendors of a user."""
     if not payload.refreshToken:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing refresh token")
 
+    logger.info(f"Starting full vendor sync for user: {payload.userId}")
+
     results = await process_all_invoices(user_id=payload.userId, refresh_token=payload.refreshToken)
+    
     return {"status": "processing", "results": results}
