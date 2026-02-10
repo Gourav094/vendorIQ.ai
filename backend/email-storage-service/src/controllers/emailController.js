@@ -2,6 +2,7 @@ import { fetchAndProcessEmails } from "../services/gmailService.js";
 import scheduleEmailJob, { getScheduledJobs, cancelScheduledJob } from "../services/schedulerService.js";
 import GoogleIntegration from "../models/GoogleIntegration.js";
 import ProcessingJob from "../models/ProcessingJob.js";
+import logger from "../utils/logger.js";
 
 // ===============================================
 // PERSISTENT JOB FUNCTIONS (using MongoDB)
@@ -104,7 +105,7 @@ export const fetchEmailsController = async (req, res) => {
     }
 
     // Log request details
-    console.log("Fetch request:", {
+    logger.info("Fetch request:", {
       userId,
       email: integration.email,
       fromDate,
@@ -142,9 +143,9 @@ export const fetchEmailsController = async (req, res) => {
             failed: 0
           });
 
-          console.log(`✅ Job ${jobId} completed successfully`);
+          logger.info(`✅ Job ${jobId} completed successfully`);
         } catch (error) {
-          console.error(`❌ Job ${jobId} failed:`, error.message);
+          logger.error(`❌ Job ${jobId} failed:`, error.message);
           await updateJobError(jobId, {
             message: error.message,
             code: error.code,
@@ -187,7 +188,7 @@ export const fetchEmailsController = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error in fetchEmailsController:", error);
+    logger.error("Error in fetchEmailsController:", error);
     let userMessage = "Failed to fetch and process emails.";
     let details = error.message;
     let suggestions = [];
@@ -238,7 +239,7 @@ export const getScheduledJobsController = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Error in getScheduledJobsController:", error);
+    logger.error("Error in getScheduledJobsController:", error);
     return res.status(500).json({
       message: "Failed to retrieve scheduled jobs.",
       details: error.message,
@@ -285,7 +286,7 @@ export const cancelScheduledJobController = async (req, res) => {
     }
 
   } catch (error) {
-    console.error("Error in cancelScheduledJobController:", error);
+    logger.error("Error in cancelScheduledJobController:", error);
     return res.status(500).json({
       message: "Failed to cancel scheduled job.",
       details: error.message,

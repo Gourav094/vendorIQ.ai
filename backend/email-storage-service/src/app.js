@@ -11,11 +11,9 @@ import rateLimit from "express-rate-limit";
 import cookieParser from "cookie-parser";
 import logger, { requestLogger } from "./utils/logger.js";
 
-//imports for swagger documentation
 import swaggerUi from "swagger-ui-express";
 import { swaggerDocs } from "./routes/swaggerDocs.js";
 import emailRoutes from "./routes/emailRoutes.js";
-import analyticsRoutes from "./routes/analyticsRoutes.js";
 import processingJobRoutes from "./routes/processingJobRoutes.js";
 import { connectDB } from "./config/db.js";
 import { getGoogleAuthURL, googleOAuthCallback } from "./controllers/authController.js";
@@ -35,68 +33,35 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(requestLogger);
 
-//db connection
 connectDB();
 
-// Rate limiters with JSON responses
+// Rate limiters
 const authLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     max: 60,
     message: { message: "Too many authentication requests. Please try again later.", retryAfter: "1 minute" }
 });
 
 const fetchLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 minute
+    windowMs: 60 * 1000,
     max: 60,
     message: { message: "Too many fetch requests. Please wait before retrying.", retryAfter: "1 minute" },
     standardHeaders: true,
     legacyHeaders: false
 });
 
-/**
- * ============================================================================
- * SWAGGER API DOCUMENTATION
- * ============================================================================
- * @route   GET /api-docs
- * @desc    Interactive Swagger UI for API documentation
- * @access  Public
- * @consumers
- *   - Developers integrating with this API
- *   - Frontend/Mobile app developers
- *   - QA and testing teams
- *   - Third-party integration partners
- * @features
- *   - Try-out functionality for testing endpoints
- *   - Complete API specifications with examples
- *   - Request/response schemas
- *   - Error code documentation
- */
+// Swagger documentation
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
-// Health check Route
+// Health check
 app.get("/health", (req, res) => {
     res.json({ status: "OK", service: "email-storage-service" });
 });
 
-/**
- * @route   GET /
- * @desc    Welcome endpoint with service information
- * @access  Public
- * @consumers
- *   - API explorers and documentation browsers
- *   - First-time API users
- * @returns {200} Welcome message
- */
 app.get("/", (req, res) => {
     res.send("Welcome to the Email Storage Service API");
 });
 
-/**
- * @route   GET /api-info
- * @desc    Comprehensive API information and endpoint listing
- * @access  Public
- * @returns {200} API metadata and available endpoints
- */
 app.get("/api-info", (req, res) => {
     res.json({
         service: "Email Storage Service",
@@ -126,12 +91,6 @@ app.get("/api-info", (req, res) => {
             users: {
                 "GET /api/v1/users/:userId/sync-status": "Get user's last sync timestamp",
                 "POST /api/v1/users/:userId/sync-status/reset": "Reset sync status to re-fetch all emails"
-            },
-            utility: {
-                "GET /health": "Service health check",
-                "GET /": "Welcome message",
-                "GET /api-info": "This endpoint - API information",
-                "GET /api-docs": "Interactive Swagger documentation"
             }
         },
         features: [
@@ -141,16 +100,11 @@ app.get("/api-info", (req, res) => {
             "Google Drive organization (invoiceAutomation folder structure)",
             "Manual and scheduled email fetching (hourly/daily/weekly)",
             "Sync status tracking to avoid duplicate fetches",
-            "Persistent job tracking with retry capability",
-            "User-friendly error messages with actionable guidance"
+            "Persistent job tracking with retry capability"
         ],
         rateLimit: {
             auth: "60 requests per minute",
             fetch: "60 requests per minute"
-        },
-        contact: {
-            documentation: `http://localhost:${config.port}/api-docs`,
-            support: "See README.md for detailed usage examples"
         }
     });
 });
@@ -159,24 +113,16 @@ app.get("/api-info", (req, res) => {
 app.get("/auth/google", authLimiter, getGoogleAuthURL);
 app.get("/auth/google/callback", authLimiter, googleOAuthCallback);
 
-// Importing email routes
+// API routes
 app.use("/api/v1", fetchLimiter, emailRoutes);
-app.use("/api/v1", analyticsRoutes);
-app.use("/api/v1/processing", processingJobRoutes);  // New persistent job routes
+app.use("/api/v1/processing", processingJobRoutes);
 
-// Start the server
-
-/**
- * ============================================================================
- * SERVER STARTUP
- * ============================================================================
- */
+// Start server
 const server = app.listen(config.port, () => {
-    logger.info(`Email Storage Service is running on port ${config.port}`);
-    logger.info(`Swagger docs available at http://localhost:${config.port}/api-docs`);
+    logger.info(`Email Storage Service started on port ${config.port}`);
 });
 
-// Increase server timeout to 2 minutes to handle long-running operations
-server.timeout = 120000; // 2 minutes
+// Increase server timeout to 2 minutes
+server.timeout = 120000;
 server.keepAliveTimeout = 120000;
-server.headersTimeout = 125000; // Slightly more than keepAliveTimeout
+server.headersTimeout = 125000;

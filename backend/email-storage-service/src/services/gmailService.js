@@ -1,5 +1,4 @@
 import { google } from "googleapis";
-import axios from "axios";
 import crypto from "crypto";
 
 import GoogleIntegration from "../models/GoogleIntegration.js";
@@ -56,14 +55,10 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
     }
   }
 
-  logger.info(`Gmail search query: ${query}`, {
+  logger.info("Gmail fetch started", {
     userId,
-    userEmail: integration.email,
-    fetchFrom: new Date(fetchFrom * 1000).toISOString(),
-    emailFilters: emailList || "ALL",
-    emailCount: emailList ? emailList.length : 0,
-    forceSync,
-    lastSyncedAt: integration.lastSyncedAt
+    emailFilters: emailList?.length || "all",
+    forceSync
   });
 
   const response = await gmail.users.messages.list({
@@ -72,19 +67,21 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
   });
 
   const emails = response.data.messages || [];
-  logger.info(`Found ${emails.length} emails matching query`, { userId, query });
 
   if (emails.length === 0) {
-    logger.warn("No emails found matching the search criteria", {
-      userId,
-      query,
-      fetchFrom: new Date(fetchFrom * 1000).toISOString(),
-      lastSyncedAt: integration.lastSyncedAt
-    });
+    logger.warn("No emails found", { userId, query });
+    return {
+      totalProcessed: 0,
+      filesUploaded: 0,
+      uploadedFiles: [],
+      vendorsDetected: [],
+      status: "no_documents_found",
+      message: "No new documents found matching the criteria."
+    };
   }
 
   let uploadedCount = 0;
-  const uploadedFiles = []; // Track uploaded files details
+  const uploadedFiles = [];
   const vendorsDetected = new Set();
 
   for (const msg of emails) {
@@ -94,25 +91,19 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
     });
 
     const headers = message.data.payload.headers;
-    const fromHeader =
-      headers.find((h) => h.name === "From")?.value || "Unknown";
-    const subjectHeader =
-      headers.find((h) => h.name === "Subject")?.value || "";
+    const fromHeader = headers.find((h) => h.name === "From")?.value || "Unknown";
+    const subjectHeader = headers.find((h) => h.name === "Subject")?.value || "";
     const vendor = detectVendor(fromHeader, subjectHeader);
     vendorsDetected.add(vendor);
 
     const parts = message.data.payload.parts || [];
     for (const part of parts) {
-      if (
-        part.filename &&
-        part.body.attachmentId
-      ) {
-        // Honor onlyPdf flag
+      if (part.filename && part.body.attachmentId) {
         const lower = (part.filename || "").toLowerCase();
         const isAllowed = onlyPdf ? lower.endsWith(".pdf") : /\.(pdf|jpg|jpeg|png)$/.test(lower);
         if (!isAllowed) continue;
 
-        // Fetch attachment content first to compute sha256 for deduplication
+        // Fetch attachment and compute hash for deduplication
         const attachment = await gmail.users.messages.attachments.get({
           userId: "me",
           messageId: msg.id,
@@ -120,7 +111,6 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
         });
         const fileBuffer = Buffer.from(attachment.data.data, "base64");
 
-        // Compute sha256 hash for content-based deduplication
         let sha256 = null;
         try {
           const hash = crypto.createHash("sha256");
@@ -128,7 +118,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
           sha256 = hash.digest("hex");
         } catch (_) { }
 
-        // Duplicate prevention: check by userId + gmailMessageId + sha256
+        // Check for duplicates
         const existing = await Document.findOne({
           userId: integration.auth_user_id,
           gmailMessageId: msg.id,
@@ -137,13 +127,6 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
 
         let uploadResult;
         if (existing) {
-          logger.info("Skipping duplicate attachment", {
-            userId,
-            vendor,
-            filename: part.filename,
-            sha256,
-            driveFileId: existing.driveFileId,
-          });
           uploadResult = {
             fileId: existing.driveFileId,
             skipped: true,
@@ -158,7 +141,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
           try {
             uploadResult = await saveToDrive(integration, vendor, fileBuffer, part.filename);
           } catch (error) {
-            logger.error("Failed to save attachment to Drive", {
+            logger.error("Drive upload failed", {
               userId,
               vendor,
               filename: part.filename,
@@ -167,7 +150,7 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
             continue;
           }
 
-          // Create Document record (single source of truth)
+          // Create Document record
           try {
             await Document.create({
               userId: integration.auth_user_id,
@@ -189,21 +172,15 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
               updatedAt: new Date(),
             });
           } catch (docErr) {
-            // Handle duplicate key error (race condition)
             if (docErr.code === 11000) {
-              logger.info("Document already exists (race condition), skipping", {
-                userId,
-                vendor,
-                filename: part.filename,
-              });
               uploadResult.skipped = true;
             } else {
-              logger.error("Failed to create Document record", { error: docErr.message });
+              logger.error("Document creation failed", { error: docErr.message });
             }
           }
         }
 
-        const uploadInfo = {
+        uploadedFiles.push({
           vendor,
           filename: part.filename,
           path: `${vendor}/invoices/${part.filename}`,
@@ -216,30 +193,26 @@ export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
           skipped: uploadResult.skipped,
           webViewLink: uploadResult.webViewLink || null,
           webContentLink: uploadResult.webContentLink || null,
-        };
-        uploadedFiles.push(uploadInfo);
+        });
 
         if (!uploadResult.skipped) {
           uploadedCount++;
         }
-
-        logger.info(`Uploaded file ${uploadedCount}`, { vendor, filename: part.filename });
       }
     }
   }
 
-  // Update lastSyncedAt on the integration
+  // Update lastSyncedAt
   integration.lastSyncedAt = new Date();
   await integration.save();
 
-  logger.info("Email fetch completed", {
+  logger.info("Gmail fetch completed", {
     userId,
-    totalEmailsProcessed: emails.length,
-    filesUploaded: uploadedCount,
-    vendorsDetected: Array.from(vendorsDetected)
+    processed: emails.length,
+    uploaded: uploadedCount,
+    vendors: vendorsDetected.size
   });
 
-  // Return uploaded files info - user will explicitly trigger processing later
   return {
     totalProcessed: emails.length,
     filesUploaded: uploadedCount,

@@ -5,14 +5,10 @@ loadGlobalEnv(dotenv);
 
 export const config = {
     port : process.env.PORT || 4002,
-    analytics: {
-        snapshotTtlMinutes: parseInt(process.env.ANALYTICS_SNAPSHOT_TTL_MINUTES || '60', 10)
-    },
     google: {
         clientId: process.env.GOOGLE_CLIENT_ID,
         clientSecret: process.env.GOOGLE_CLIENT_SECRET,
         refreshToken: process.env.GOOGLE_REFRESH_TOKEN,
         redirectUri: process.env.GOOGLE_EMAIL_REDIRECT_URI || 'http://localhost:4002/auth/google/callback',
     }
-
 };
