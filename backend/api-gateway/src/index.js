@@ -20,27 +20,24 @@ const FRONTEND_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:8000';
 app.use(helmet());
 app.use(cookieParser());
 
-// Apply centralized logging middleware EARLY to capture all requests
+// Apply centralized logging middleware
 app.use(requestLogger);
 
-// IMPORTANT: Don't parse body for proxy routes - let the target service handle it
-// Only parse body for direct routes (/, /health)
+// Body parsing - skip for proxy routes
 const shouldParseBody = (req, res, next) => {
-  // Skip body parsing for proxied routes
   if (req.path.startsWith('/auth') || 
       req.path.startsWith('/email') || 
       req.path.startsWith('/chat') || 
       req.path.startsWith('/ocr')) {
     return next();
   }
-  // Parse body for other routes
   express.json()(req, res, next);
 };
 
 app.use(shouldParseBody);
 app.use(express.urlencoded({ extended: true }));
 
-// CORS (allow credentials for httpOnly cookies)
+// CORS
 app.use(
   cors({
     origin: FRONTEND_ORIGIN,
@@ -50,9 +47,6 @@ app.use(
   })
 );
 app.options('*', cors());
-
-// Logging (morgan removed in favor of centralized logger, but keeping for backwards compatibility)
-// app.use(morgan('combined')); // You can remove this line as it's redundant now
 
 // Rate limiting
 app.use(
@@ -64,7 +58,7 @@ app.use(
   })
 );
 
-// Root & health (public)
+// Root & health
 app.get('/', (req, res) => {
   res.json({
     service: 'VendorIQ API Gateway',
@@ -74,27 +68,22 @@ app.get('/', (req, res) => {
 });
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// Mount proxies that must be public BEFORE JWT middleware when applicable:
-// Auth prefix is public (auth endpoints are public)
+// Mount public routes
 app.use('/auth', routes.auth);
-
-// Email has some public OAuth endpoints under /auth/google
-// We mount email after JWT middleware but verifyToken will skip /email/auth/* based on rules
 
 // Apply JWT middleware for protected routes
 app.use(verifyToken);
 
-// Mount other service prefixes (protected by verifyToken, but verifyToken skips allowed public email auth)
+// Mount protected routes
 app.use('/email', routes.email);
 app.use('/chat', routes.chat);
 app.use('/ocr', routes.ocr);
 
 // Error handling
 app.use((err, req, res, next) => {
-  logger.error('Gateway Error', {
+  logger.error('Gateway error', {
     requestId: req.requestId,
     error: err.message,
-    stack: err.stack,
     url: req.originalUrl || req.url,
     method: req.method
   });
@@ -108,15 +97,13 @@ app.use((err, req, res, next) => {
 
 // 404 fallback
 app.use((req, res) => {
-  logger.warn('Route not found', {
-    requestId: req.requestId,
-    url: req.originalUrl || req.url,
-    method: req.method
-  });
   res.status(404).json({ error: 'Route not found' });
 });
 
 app.listen(PORT, () => {
-  logger.info(`VendorIQ API Gateway started`, { port: PORT, environment: process.env.NODE_ENV || 'development' });
+  logger.info('API Gateway started', { 
+    port: PORT, 
+    environment: process.env.NODE_ENV || 'development' 
+  });
   console.log(`VendorIQ API Gateway listening on port ${PORT}`);
 });

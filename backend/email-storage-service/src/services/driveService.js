@@ -48,7 +48,7 @@ export const saveToDrive = async (integration, vendor, fileBuffer, fileName) => 
   });
   const fileDetails = await getFileLinks(drive, created.data.id);
 
-  logger.info(`Uploaded → ${vendorFolderName}/invoices/${fileName}`);
+  logger.info("Drive upload success", { vendor: vendorFolderName, file: fileName });
 
   return {
     fileId: created.data.id,
