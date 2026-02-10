@@ -13,7 +13,7 @@ VECTORDB_PERSIST_DIRECTORY = os.getenv("VECTORDB_PERSIST_DIRECTORY", "data/vecto
 VENDOR_DATA_DIRECTORY = os.getenv("VENDOR_DATA_DIRECTORY", "sample-data")
 
 # Email Storage Service URL (to fetch master.json)
-EMAIL_STORAGE_SERVICE_URL = os.getenv("EMAIL_SERVICE_URL", "http://localhost:4002/api/v1")
+EMAIL_STORAGE_SERVICE_URL = os.getenv("EMAIL_SERVICE_URL", "http://localhost:4002")
 
 # Local LLM Configuration (Ollama)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")

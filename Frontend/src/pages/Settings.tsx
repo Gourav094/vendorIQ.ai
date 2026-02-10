@@ -378,7 +378,6 @@ const DangerZone = ({ userId }: { userId: string | undefined }) => {
                 <p className="text-sm text-muted-foreground">
                   Permanently delete all data including MongoDB records, vector database, and Google Drive folders.
                 </p>
-                <span className="text-red-600 text-sm"> This action cannot be undone.</span>
               </div>
             </div>
             <Button

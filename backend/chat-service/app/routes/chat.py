@@ -183,26 +183,24 @@ async def _fetch_master_via_email_service(user_id: str, vendor_folder_id: str) -
     try:
         from app.config import EMAIL_STORAGE_SERVICE_URL
         
-        url = f"{EMAIL_STORAGE_SERVICE_URL}/drive/users/{user_id}/vendors/{vendor_folder_id}/master"
+        url = f"{EMAIL_STORAGE_SERVICE_URL}/api/v1/drive/users/{user_id}/vendors/{vendor_folder_id}/master"
         
-        logger.debug(f"📞 Calling email-storage-service: {url}")
+        logger.debug(f"Fetching master.json from: {url}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url)
             
             if response.status_code != 200:
-                logger.error(f"❌ Failed to fetch master.json: {response.status_code}")
+                logger.error(f"Failed to fetch master.json: HTTP {response.status_code}")
                 return []
             
             data = response.json()
             records = data.get("records", [])
-            logger.debug(f"✓ Fetched {len(records)} records from master.json")
+            logger.debug(f"Fetched {len(records)} records from master.json")
             return records if isinstance(records, list) else []
             
     except Exception as e:
-        logger.error(f"💥 Error fetching master.json: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error fetching master.json: {e}")
         return []
 
 
