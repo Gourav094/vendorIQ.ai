@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-WORKDIR /app/backend/authentication-service
+WORKDIR /app
 
 COPY authentication-service/requirements.txt .
 

@@ -1,9 +1,8 @@
 FROM node:18-alpine
 
-WORKDIR /app/backend/email-storage-service
+WORKDIR /app
 
 COPY email-storage-service/package*.json ./
-
 RUN npm install --production
 
 COPY config ../config
