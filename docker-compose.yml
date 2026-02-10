@@ -1,8 +1,8 @@
 services:
   api-gateway:
     build:
-      context: ./backend/api-gateway
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: api-gateway/Dockerfile
     container_name: vendoriq-api-gateway
     restart: unless-stopped
     ports:
@@ -17,8 +17,8 @@ services:
 
   authentication-service:
     build:
-      context: ./backend/authentication-service
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: authentication-service/Dockerfile
     container_name: vendoriq-auth-service
     restart: unless-stopped
     ports:
@@ -28,8 +28,8 @@ services:
 
   email-storage-service:
     build:
-      context: ./backend/email-storage-service
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: email-storage-service/Dockerfile
     container_name: vendoriq-email-service
     restart: unless-stopped
     ports:
@@ -42,24 +42,19 @@ services:
   # OCR Extraction Service
   ocr-extraction-service:
     build:
-      context: ./backend/ocr-extraction-service
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: ocr-extraction-service/Dockerfile
     container_name: vendoriq-ocr-service
     restart: unless-stopped
     ports:
       - "4003:4003"
     env_file:
       - ./backend/.env.production
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4003/api/v1/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   chat-service:
     build:
-      context: ./backend/chat-service
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: chat-service/Dockerfile
     container_name: vendoriq-chat-service
     restart: unless-stopped
     ports:
@@ -68,6 +63,11 @@ services:
       - ./backend/.env.production
     volumes:
       - chat_vectordb:/app/data/vectordb
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
 
   frontend:
     build:
@@ -78,7 +78,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - VITE_API_GATEWAY_URL=http://api-gateway:4000
+      - VITE_API_GATEWAY_URL=http://localhost:4000
 
 volumes:
   chat_vectordb:

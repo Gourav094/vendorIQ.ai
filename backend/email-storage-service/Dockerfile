@@ -1,12 +1,13 @@
 FROM node:18-alpine
 
-WORKDIR /app
+WORKDIR /app/backend/email-storage-service
 
-COPY package*.json ./
+COPY email-storage-service/package*.json ./
 
 RUN npm install --production
 
-COPY . .
+COPY config ../config
+COPY email-storage-service ./
 
 EXPOSE 4002
 
