@@ -6,7 +6,6 @@ const SERVICES = {
   auth: process.env.AUTH_SERVICE_URL || 'http://localhost:4001',
   email: process.env.EMAIL_SERVICE_URL || 'http://localhost:4002',
   ocr: process.env.OCR_SERVICE_URL || 'http://localhost:4003',
-  analytics: process.env.ANALYTICS_SERVICE_URL || 'http://localhost:4004',
   chat: process.env.CHAT_SERVICE_URL || 'http://localhost:4005'
 };
 
@@ -17,7 +16,7 @@ function makeProxyOptions(serviceName, target) {
     secure: false,
     ws: true,
     logLevel: 'warn',
-    // remove the gateway prefix (/auth, /email, /chat, /ocr, /analytics)
+    // remove the gateway prefix (/auth, /email, /chat, /ocr)
     pathRewrite: (path, req) => {
       // strip only the first path segment (e.g., /auth -> '')
       // so /auth/api/v1/auth/login -> /api/v1/auth/login
@@ -67,6 +66,5 @@ module.exports = {
   auth: createProxyMiddleware(makeProxyOptions('auth', SERVICES.auth)),
   email: createProxyMiddleware(makeProxyOptions('email', SERVICES.email)),
   ocr: createProxyMiddleware(makeProxyOptions('ocr', SERVICES.ocr)),
-  analytics: createProxyMiddleware(makeProxyOptions('analytics', SERVICES.analytics)),
   chat: createProxyMiddleware(makeProxyOptions('chat', SERVICES.chat))
 };

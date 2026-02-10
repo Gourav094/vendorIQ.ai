@@ -13,7 +13,7 @@ class VendorDataLoader:
         self.vendors_data: List[Vendor] = []
         self.google_client_id = os.getenv("GOOGLE_CLIENT_ID")
         self.google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-        self.email_service_base = os.getenv("EMAIL_STORAGE_SERVICE_URL", "http://localhost:4002/api/v1")
+        self.email_service_base = os.getenv("EMAIL_SERVICE_URL", "http://localhost:4002/api/v1")
         
     def load_vendor_json_files(self) -> VendorDataset:
         """Load all vendor JSON files from the specified directory."""

@@ -8,9 +8,6 @@ import Document from "../models/Document.js";
 import { detectVendor } from "../utils/vendorDetection.js";
 import logger from "../utils/logger.js";
 
-const OCR_BASE_URL = process.env.OCR_SERVICE_BASE_URL || "http://localhost:4003";
-const OCR_TOKEN = process.env.OCR_TRIGGER_TOKEN;
-
 export const fetchAndProcessEmails = async (userId, fromDate, filters) => {
   // userId is auth_user_id from auth service
   const integration = await GoogleIntegration.findOne({ 

@@ -2,10 +2,15 @@ import os
 import json
 import logging
 import time
-from dotenv import load_dotenv
+import sys
+from pathlib import Path
 
-# Load environment variables
-load_dotenv()
+# Add backend directory to Python path
+backend_dir = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(backend_dir))
+
+# Load global environment variables
+from config.load_env import *
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -15,7 +20,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
 
 # Gemini configuration (production)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # Local LLM configuration (Ollama)
 LOCAL_LLM_BASE_URL = os.getenv("LOCAL_LLM_BASE_URL", "http://host.docker.internal:11434")

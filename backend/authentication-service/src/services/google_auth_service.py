@@ -1,10 +1,16 @@
 import os
+import sys
+from pathlib import Path
 from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+# Add backend directory to Python path
+backend_dir = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(backend_dir))
+
+# Load global environment variables
+from config.load_env import *
 
 class GoogleAuthService:
     def __init__(self):

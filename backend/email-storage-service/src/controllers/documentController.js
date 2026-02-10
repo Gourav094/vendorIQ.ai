@@ -3,7 +3,7 @@ import GoogleIntegration from "../models/GoogleIntegration.js";
 import Document from "../models/Document.js";
 import logger from "../utils/logger.js";
 
-const OCR_BASE_URL = process.env.OCR_SERVICE_BASE_URL || "http://localhost:4003";
+const OCR_BASE_URL = process.env.OCR_SERVICE_URL || "http://localhost:4003";
 
 /**
  * Process all pending documents for a user

@@ -30,8 +30,7 @@ const shouldParseBody = (req, res, next) => {
   if (req.path.startsWith('/auth') || 
       req.path.startsWith('/email') || 
       req.path.startsWith('/chat') || 
-      req.path.startsWith('/ocr') || 
-      req.path.startsWith('/analytics')) {
+      req.path.startsWith('/ocr')) {
     return next();
   }
   // Parse body for other routes
@@ -70,7 +69,7 @@ app.get('/', (req, res) => {
   res.json({
     service: 'VendorIQ API Gateway',
     version: '1.0.0',
-    routes: ['/auth/*', '/email/*', '/chat/*', '/ocr/*', '/analytics/*']
+    routes: ['/auth/*', '/email/*', '/chat/*', '/ocr/*']
   });
 });
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
@@ -89,7 +88,6 @@ app.use(verifyToken);
 app.use('/email', routes.email);
 app.use('/chat', routes.chat);
 app.use('/ocr', routes.ocr);
-app.use('/analytics', routes.analytics);
 
 // Error handling
 app.use((err, req, res, next) => {
