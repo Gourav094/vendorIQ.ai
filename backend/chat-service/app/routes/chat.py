@@ -12,11 +12,13 @@ Endpoints:
 from fastapi import APIRouter, HTTPException, Query, Path
 from pydantic import BaseModel
 from typing import Optional
+import logging
 from app.core.orchestrator import VendorKnowledgeOrchestrator
 from app.db import get_unindexed_documents, mark_documents_indexed, mark_documents_indexed_by_sha256, get_user_document_stats
 import httpx
 
 router = APIRouter(tags=["Chat Service"])
+logger = logging.getLogger(__name__)
 
 # Singleton orchestrator
 _ORCHESTRATOR: VendorKnowledgeOrchestrator | None = None
@@ -60,10 +62,13 @@ async def sync_documents(request: SyncRequest):
     if not user_id:
         raise HTTPException(status_code=400, detail="userId is required")
     
+    logger.info(f"Sync requested for user: {user_id}")
+    
     # Get unindexed documents from MongoDB (includes sha256)
     unindexed = get_unindexed_documents(user_id)
     
     if not unindexed:
+        logger.info(f"No documents to index for user: {user_id}")
         return SyncResponse(
             success=True,
             documentsIndexed=0,
@@ -75,7 +80,7 @@ async def sync_documents(request: SyncRequest):
     
     # Get already indexed sha256 hashes from vector DB (EARLY CHECK - avoid expensive embedding)
     indexed_hashes = orchestrator.vector_db.get_indexed_sha256_hashes(user_id)
-    print(f"Found {len(indexed_hashes)} already indexed sha256 hashes in vector DB")
+    logger.info(f"Found {len(indexed_hashes)} already indexed sha256 hashes in vector DB")
     
     # Separate documents: already indexed (by content) vs truly new
     already_indexed_docs = []
@@ -88,13 +93,13 @@ async def sync_documents(request: SyncRequest):
         else:
             new_docs.append(doc)
     
-    print(f"Documents: {len(already_indexed_docs)} already in vector DB (by sha256), {len(new_docs)} new to index")
+    logger.info(f"Documents: {len(already_indexed_docs)} already in vector DB (by sha256), {len(new_docs)} new to index")
     
     # Mark already-indexed documents in MongoDB (skip embedding entirely)
     if already_indexed_docs:
         sha256_list = [doc.get("sha256") for doc in already_indexed_docs if doc.get("sha256")]
         marked = mark_documents_indexed_by_sha256(user_id, sha256_list)
-        print(f"✓ Marked {marked} documents as indexed (content already in vector DB)")
+        logger.info(f"✓ Marked {marked} documents as indexed (content already in vector DB)")
     
     # If no new documents, we're done
     if not new_docs:
@@ -114,7 +119,7 @@ async def sync_documents(request: SyncRequest):
         vendor_folder_id = doc.get("vendorFolderId")
         
         if not vendor_folder_id:
-            print(f"Skipping document {doc.get('driveFileId')}: no vendorFolderId")
+            logger.warning(f"Skipping document {doc.get('driveFileId')}: no vendorFolderId")
             continue
             
         if vendor_name not in vendors_data:
@@ -124,7 +129,7 @@ async def sync_documents(request: SyncRequest):
             }
         vendors_data[vendor_name]["docs"].append(doc)
     
-    print(f"Processing {len(vendors_data)} vendors with {len(new_docs)} new documents")
+    logger.info(f"Processing {len(vendors_data)} vendors with {len(new_docs)} new documents")
     
     # Process each vendor's documents
     for vendor_name, vendor_info in vendors_data.items():
@@ -136,7 +141,7 @@ async def sync_documents(request: SyncRequest):
             )
             
             if not master_records:
-                print(f"No master.json found for vendor {vendor_name}")
+                logger.warning(f"No master.json found for vendor {vendor_name}")
                 continue
             
             # Build dataset for this vendor
@@ -151,10 +156,10 @@ async def sync_documents(request: SyncRequest):
                 # Mark these documents as indexed
                 file_ids = [doc.get("driveFileId") for doc in vendor_info["docs"]]
                 indexed_file_ids.extend(file_ids)
-                print(f"✓ Indexed {len(file_ids)} documents for vendor {vendor_name}")
+                logger.info(f"✓ Indexed {len(file_ids)} documents for vendor {vendor_name}")
                 
         except Exception as e:
-            print(f"Error indexing vendor {vendor_name}: {e}")
+            logger.error(f"Error indexing vendor {vendor_name}: {e}")
             import traceback
             traceback.print_exc()
             continue
@@ -162,6 +167,8 @@ async def sync_documents(request: SyncRequest):
     # Update MongoDB for newly indexed documents
     if indexed_file_ids:
         mark_documents_indexed(user_id, indexed_file_ids)
+    
+    logger.info(f"Sync complete for user {user_id}: {len(indexed_file_ids)} indexed, {len(already_indexed_docs)} skipped")
     
     return SyncResponse(
         success=True,
@@ -178,22 +185,22 @@ async def _fetch_master_via_email_service(user_id: str, vendor_folder_id: str) -
         
         url = f"{EMAIL_STORAGE_SERVICE_URL}/drive/users/{user_id}/vendors/{vendor_folder_id}/master"
         
-        print(f"📞 Calling email-storage-service: {url}")
+        logger.debug(f"📞 Calling email-storage-service: {url}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url)
             
             if response.status_code != 200:
-                print(f"❌ Failed to fetch master.json: {response.status_code}")
+                logger.error(f"❌ Failed to fetch master.json: {response.status_code}")
                 return []
             
             data = response.json()
             records = data.get("records", [])
-            print(f"✓ Fetched {len(records)} records from master.json")
+            logger.debug(f"✓ Fetched {len(records)} records from master.json")
             return records if isinstance(records, list) else []
             
     except Exception as e:
-        print(f"💥 Error fetching master.json: {e}")
+        logger.error(f"💥 Error fetching master.json: {e}")
         import traceback
         traceback.print_exc()
         return []
@@ -236,6 +243,8 @@ async def query(request: QueryRequest):
     if not request.question:
         raise HTTPException(status_code=400, detail="question is required")
     
+    logger.info(f"Query from user {request.userId}: {request.question[:50]}...")
+    
     orchestrator = get_orchestrator()
     
     result = orchestrator.answer_query(
@@ -277,6 +286,8 @@ async def analytics(
     if not userId:
         raise HTTPException(status_code=400, detail="userId is required")
     
+    logger.info(f"Analytics requested for user: {userId}, period: {period}")
+    
     orchestrator = get_orchestrator()
     result = orchestrator.get_analytics(user_id=userId, period=period)
     
@@ -306,12 +317,16 @@ async def delete_user_data(
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
     
+    logger.info(f"Deleting all data for user: {user_id}")
+    
     orchestrator = get_orchestrator()
     result = orchestrator.delete_user_data(user_id)
     
     # Also reset MongoDB indexed flags
     from app.db import reset_user_index
     docs_reset = reset_user_index(user_id)
+    
+    logger.info(f"Deleted vector DB data and reset {docs_reset} MongoDB docs for user: {user_id}")
     
     return {
         "success": result.get("success"),

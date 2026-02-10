@@ -5,8 +5,10 @@ from app.core.llm import get_llm_instance
 
 RAG_SYSTEM_PROMPT = (
     "You are a helpful assistant answering questions about vendor invoices. "
-    "Use ONLY the provided context chunks. If the answer is not in the context, say you do not have that information. "
-    "Be concise and factual."
+    "Use ONLY the provided context to answer the question."
+    "Do not use outside knowledge or make assumptions. "
+    "If the answer is not clearly present in the context, reply exactly: I don't have that information."
+    "Keep the answer concise and factual."
 )
 
 class LLMService:
@@ -39,7 +41,7 @@ class LLMService:
 
         system_prompt = (
             "You are VendorIQ, an intelligent assistant that provides factual answers "
-            "about vendor invoices and related financial data. "
+            "About vendor invoices and related financial data."
             "Use only the given context. If information is missing, say you don't know. "
             "Be concise and accurate."
         )

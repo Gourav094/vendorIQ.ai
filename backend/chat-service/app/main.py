@@ -1,7 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
 from app.routes import chat
 import uvicorn
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="VendorIQ Chat Service",
@@ -29,6 +39,8 @@ app.add_middleware(
 
 # Include REST router
 app.include_router(chat.router, prefix="/api/v1")
+
+logger.info("Chat service initialized!")
 
 @app.get("/", tags=["Root"])
 async def root():

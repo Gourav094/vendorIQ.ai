@@ -1,7 +1,3 @@
-"""
-MongoDB connection module for Chat service.
-Connects to shared 'app_database' used by all services.
-"""
 import os
 import logging
 import certifi
@@ -29,11 +25,7 @@ def get_db():
 
 
 def get_unindexed_documents(user_id: str) -> list:
-    """
-    Get documents that completed OCR but not yet indexed.
-    Called during sync to find what needs indexing.
-    Returns documents with sha256 for deduplication check.
-    """
+    """Get documents that completed OCR but not yet indexed."""
     db = get_db()
     docs = db["documents"]
     return list(docs.find({
@@ -51,10 +43,7 @@ def get_unindexed_documents(user_id: str) -> list:
 
 
 def mark_documents_indexed(user_id: str, drive_file_ids: list) -> int:
-    """
-    Mark multiple documents as indexed.
-    Returns count of updated documents.
-    """
+    """Mark multiple documents as indexed."""
     db = get_db()
     docs = db["documents"]
     
@@ -74,10 +63,7 @@ def mark_documents_indexed(user_id: str, drive_file_ids: list) -> int:
 
 
 def mark_documents_indexed_by_sha256(user_id: str, sha256_list: list) -> int:
-    """
-    Mark documents as indexed by their sha256 hash.
-    Used when content already exists in vector DB.
-    """
+    """Mark documents as indexed by their sha256 hash."""
     db = get_db()
     docs = db["documents"]
     
@@ -97,10 +83,7 @@ def mark_documents_indexed_by_sha256(user_id: str, sha256_list: list) -> int:
 
 
 def reset_user_index(user_id: str) -> int:
-    """
-    Reset indexed status for all user documents.
-    Called when user wants to re-index everything.
-    """
+    """Reset indexed status for all user documents."""
     db = get_db()
     docs = db["documents"]
     
