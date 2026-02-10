@@ -8,12 +8,6 @@ from pymongo.errors import DuplicateKeyError
 from bson import ObjectId
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
-from utils.config import (
-    JWT_SECRET,
-    JWT_ALGORITHM,
-    ACCESS_TOKEN_EXPIRE_MINUTES,
-    REFRESH_TOKEN_EXPIRE_DAYS,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +18,16 @@ class UserAuthService:
         if not mongo_uri:
             raise RuntimeError("MONGO_URI environment variable is required")
         db_name = os.getenv("MONGO_DB_NAME", "app_database")
+        
+        # JWT config from environment
+        self.jwt_secret = os.getenv("JWT_SECRET")
+        self.jwt_algorithm = os.getenv("JWT_ALGORITHM", "HS256")
+        self.access_token_expire_minutes = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+        self.refresh_token_expire_days = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
+        
+        if not self.jwt_secret:
+            raise RuntimeError("JWT_SECRET environment variable is required")
+        
         self.client = MongoClient(  
             mongo_uri,  
             serverSelectionTimeoutMS=10000,  
@@ -246,7 +250,7 @@ class UserAuthService:
 
     # ---------- JWT helper functions ----------
     def _create_access_token(self, user_id: str, email: str, username: str):
-        expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=self.access_token_expire_minutes)
         payload = {
             "sub": str(user_id),
             "email": email,
@@ -254,10 +258,10 @@ class UserAuthService:
             "exp": expire,
             "type": "access",
         }
-        return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        return jwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
 
     def _create_refresh_token(self, user_id: str, email: str, username: str):
-        expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+        expire = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=self.refresh_token_expire_days)
         payload = {
             "sub": str(user_id),
             "email": email,
@@ -265,11 +269,11 @@ class UserAuthService:
             "exp": expire,
             "type": "refresh",
         }
-        return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+        return jwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
 
     def verify_token(self, token: str):
         try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            payload = jwt.decode(token, self.jwt_secret, algorithms=[self.jwt_algorithm])
             return True, payload
         except jwt.ExpiredSignatureError:
             return False, "Token expired"

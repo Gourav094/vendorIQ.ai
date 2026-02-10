@@ -1,13 +1,8 @@
-"""Authentication Controller
-Provides Google OAuth2 and email/password authentication endpoints along with basic user management.
-Documentation style aligned with email-storage-service (route, desc, access, consumers, examples, notes).
-"""
-
 from flask import Blueprint, jsonify, redirect, request
 import os
-from dotenv import load_dotenv
+import logging
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 try:
     from ..services.google_auth_service import GoogleAuthService
@@ -22,40 +17,13 @@ user_auth_service = UserAuthService()
 
 @auth_bp.route("/api/v1/auth/google/login", methods=["GET"])
 def login():
-    """Endpoint: GET /api/v1/auth/google/login
-    Purpose: Generate Google OAuth2 consent URL the client should redirect user to.
-    Access: Public
-    Consumers:
-      - Web frontend initiating Google login
-      - Mobile / external clients wanting Google OAuth flow
-    Returns: JSON { auth_url }
-    Flow:
-      1. Client requests this endpoint.
-      2. Receives auth_url.
-      3. Redirect user to auth_url; user consents & Google redirects to /auth/callback.
-    Example:
-      curl -s http://localhost:4001/api/v1/auth/google/login | jq
-    Notes:
-      - No authentication required.
-      - URL contains scopes defined in GoogleAuthService.
-    """
+    """Generate Google OAuth2 authorization URL"""
     auth_url = google_auth_service.get_authorization_url()
     return jsonify({"auth_url": auth_url})
 
 @auth_bp.route("/auth/callback")
 def callback():
-    """Endpoint: GET /auth/callback (UNVERSIONED)
-    Purpose: Handle redirect from Google with authorization code; exchange for tokens; set secure cookies; redirect to frontend.
-    Access: Public (Google redirects here). Security enforced by opaque one-time code.
-    Consumers:
-      - Google OAuth redirect only (users should not call manually).
-    Returns: Redirect (302) to FRONTEND_URL/ with cookies set OR JSON error.
-    Example (manual debug):
-      curl -G http://localhost:4001/auth/callback --data-urlencode "code=AUTH_CODE" -v
-    Notes:
-      - Lives outside /api/v1 for stability of OAuth redirect URI.
-      - Sets httpOnly cookies: access_token (1h) & refresh_token (~30d).
-    """
+    """Handle Google OAuth callback, exchange code for tokens, and set secure cookies."""
     code = request.args.get("code")
     credentials = google_auth_service.exchange_code_for_token(code)
     if not credentials:
@@ -74,7 +42,8 @@ def callback():
 
     user = user_auth_service.upsert_google_user(email, google_id, username)
     tokens = user_auth_service.generate_tokens_for_user(user)
-    print("tokens: ",tokens)
+    logger.info("OAuth callback successful for user: %s", email)
+    
     cookie_secure_env = os.getenv("COOKIE_SECURE", "True")  
     cookie_secure = cookie_secure_env.lower() in ("true", "1", "yes") 
 
@@ -98,17 +67,7 @@ def callback():
 
 @auth_bp.route("/api/v1/auth/logout", methods=["POST"])
 def logout():
-    """Endpoint: POST /api/v1/auth/logout
-    Purpose: Invalidate current session by clearing auth cookies.
-    Access: Authenticated (but will respond success even if cookies absent to simplify client logic).
-    Consumers:
-      - Frontend logout action.
-    Returns: JSON message.
-    Example:
-      curl -X POST -b "access_token=..." http://localhost:4001/api/v1/auth/logout
-    Notes:
-      - Stateless; does not blacklist tokens. Client must discard cached tokens.
-    """
+    """Clear authentication cookies to invalidate current session."""
     response = jsonify({"message": "Logged out successfully"})
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
@@ -116,22 +75,7 @@ def logout():
 
 @auth_bp.route("/api/v1/auth/login", methods=["POST"])
 def login_email():
-    """Endpoint: POST /api/v1/auth/login
-    Purpose: Authenticate user via email/password. Issues new access & refresh tokens (cookies).
-    Access: Public (credentials required).
-    Consumers:
-      - Frontend login form.
-      - Programmatic clients performing password auth.
-    Body: { email: string, password: string }
-    Returns: 200 with user summary + cookies OR 400 error.
-    Example:
-      curl -X POST http://localhost:4001/api/v1/auth/login \
-        -H 'Content-Type: application/json' \
-        -d '{"email":"user@example.com","password":"secret"}' -i
-    Notes:
-      - access_token lifetime ~1h; refresh_token ~30d.
-      - Cookies are httpOnly (cannot be read by JS) for security.
-    """
+    """Authenticate user with email/password and issue access/refresh token cookies."""
     data = request.get_json() or {}
     email = data.get("email")
     password = data.get("password")
@@ -170,21 +114,7 @@ def login_email():
 
 @auth_bp.route("/api/v1/auth/register", methods=["POST"])
 def register():
-    """Endpoint: POST /api/v1/auth/register
-    Purpose: Create a new user and automatically log them in (issuing cookies) when possible.
-    Access: Public.
-    Consumers:
-      - Registration form.
-    Body: { email, password, username }
-    Returns: 201 with user + message, possibly tokens; 400 on validation failure.
-    Example:
-      curl -X POST http://localhost:4001/api/v1/auth/register \
-        -H 'Content-Type: application/json' \
-        -d '{"email":"new@example.com","password":"secret","username":"newuser"}'
-    Notes:
-      - Performs uniqueness checks on email.
-      - If auto-login fails, user still created.
-    """
+    """Create new user account and automatically log them in with cookies."""
     data = request.get_json() or {}
     email = data.get("email")
     password = data.get("password")
@@ -213,17 +143,7 @@ def register():
 
 @auth_bp.route("/api/v1/users/<user_id>", methods=["DELETE"]) 
 def delete_user(user_id):
-    """Endpoint: DELETE /api/v1/users/{user_id}
-    Purpose: Remove a user permanently.
-    Access: Admin / privileged context (no enforcement yet – ensure gateway enforces).
-    Consumers:
-      - Administrative dashboard.
-    Returns: 200 success message or 404 error.
-    Example:
-      curl -X DELETE http://localhost:4001/api/v1/users/USER_ID
-    Notes:
-      - Irreversible; associated auth tokens become invalid when user missing.
-    """
+    """Permanently remove user from the system."""
     success, message = user_auth_service.delete_user(user_id)
     if success:
         return jsonify({"message": message}), 200
@@ -231,36 +151,13 @@ def delete_user(user_id):
 
 @auth_bp.route("/api/v1/users", methods=["GET"])
 def list_users():
-    """Endpoint: GET /api/v1/users
-    Purpose: List all registered users.
-    Access: Admin / internal tooling.
-    Consumers:
-      - Diagnostics or admin panel.
-    Returns: { users: [User] }
-    Example:
-      curl http://localhost:4001/api/v1/users | jq
-    Notes:
-      - Consider pagination for large datasets (future enhancement).
-    """
+    """Retrieve list of all registered users."""
     users = user_auth_service.list_users()
     return jsonify({"users": users}), 200
 
 @auth_bp.route("/api/v1/auth/refresh", methods=["POST"])
 def refresh():
-    """Endpoint: POST /api/v1/auth/refresh
-    Purpose: Exchange valid refresh_token for new access_token (+ new refresh optionally).
-    Access: Requires refresh_token cookie or body value.
-    Consumers:
-      - Silent token refresh in frontend before access token expiry.
-    Body (optional): { refresh_token } if cookie absent.
-    Returns: 200 with tokens OR 400/401 errors.
-    Example (cookie):
-      curl -X POST -b "refresh_token=..." http://localhost:4001/api/v1/auth/refresh
-    Example (body):
-      curl -X POST http://localhost:4001/api/v1/auth/refresh -H 'Content-Type: application/json' -d '{"refresh_token":"..."}'
-    Notes:
-      - access_token returned also set as cookie; refresh rotation may occur.
-    """
+    """Exchange valid refresh_token for new access_token."""
     refresh_token = (
         request.cookies.get("refresh_token")
         or (request.get_json() or {}).get("refresh_token")
@@ -285,11 +182,7 @@ def refresh():
 
 @auth_bp.route("/api/v1/auth/me", methods=["GET"])
 def get_current_user():
-    """Endpoint: GET /api/v1/auth/me
-    Purpose: Retrieve current authenticated user's profile using access_token (cookie or Authorization header).
-    Returns existing access_token (no new issuance).
-    Response shape: { isAuthenticated, user|null, access_token|null }
-    """
+    """Get current authenticated user profile."""
     # Try cookie first
     access_token = request.cookies.get("access_token")
     # Fallback to Authorization header if cookie missing

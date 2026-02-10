@@ -1,16 +1,12 @@
 import os
 import sys
+import logging
 from pathlib import Path
 from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
 from google.auth.transport import requests
 
-# Add backend directory to Python path
-backend_dir = Path(__file__).resolve().parent.parent.parent.parent
-sys.path.insert(0, str(backend_dir))
-
-# Load global environment variables
-from config.load_env import *
+logger = logging.getLogger(__name__)
 
 class GoogleAuthService:
     def __init__(self):
@@ -50,12 +46,9 @@ class GoogleAuthService:
 
     def verify_token(self, token):
         try:
-            print(f"Verifying token with client_id: {self.client_id}")
-            print(f"Token (first 50 chars): {token[:50] if token else 'None'}...")
             result = id_token.verify_oauth2_token(token, requests.Request(), self.client_id)
-            print(f"Token verified successfully: {result.get('email')}")
+            logger.info("Token verified for user: %s", result.get('email'))
             return result
         except Exception as e:
-            print(f"Token verification failed: {type(e).__name__}: {e}")
-            print(f"Client ID used: {self.client_id}")
+            logger.error("Token verification failed: %s", str(e))
             return None

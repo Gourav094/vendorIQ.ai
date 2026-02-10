@@ -2,6 +2,14 @@ from flask import Flask
 from flask_cors import CORS
 from flasgger import Swagger
 import os, sys
+import logging
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
 
 # Add backend directory to Python path to find config module
 from pathlib import Path
