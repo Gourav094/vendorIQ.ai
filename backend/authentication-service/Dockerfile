@@ -1,12 +1,13 @@
 FROM python:3.10-slim
 
-WORKDIR /app
+WORKDIR /app/backend/authentication-service
 
-COPY requirements.txt .
+COPY authentication-service/requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY config ../config
+COPY authentication-service .
 
 EXPOSE 4001
 
