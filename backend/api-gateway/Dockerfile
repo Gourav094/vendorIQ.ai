@@ -1,6 +1,6 @@
 FROM node:18-alpine
 
-WORKDIR /app
+WORKDIR /app/backend/api-gateway
 
 COPY api-gateway/package*.json ./
 RUN npm install --production
