@@ -88,7 +88,7 @@ def call_ollama(prompt: str, config: dict, max_retries: int = 2) -> dict:
 
 
 def call_gemini(prompt: str, config: dict, max_retries: int = 3) -> dict:
-    """Call Google Gemini API for production inference."""
+    """Call Google Gemini API for production inference with rate limiting."""
     import requests
     
     headers = {
@@ -101,17 +101,17 @@ def call_gemini(prompt: str, config: dict, max_retries: int = 3) -> dict:
     }
     
     retry_count = 0
-    base_delay = 2
+    base_delay = 5
     
     while retry_count <= max_retries:
         try:
             response = requests.post(config["url"], headers=headers, json=payload, timeout=45)
             
             # Handle rate limiting
-            if response.status_code == 429:
+            if (response.status_code == 429):
                 if retry_count < max_retries:
                     delay = base_delay * (2 ** retry_count)
-                    logging.warning(f"Rate limit hit (429). Retrying in {delay}s...")
+                    logger.warning(f"Rate limit hit (429). Retrying in {delay}s... (attempt {retry_count + 1}/{max_retries})")
                     time.sleep(delay)
                     retry_count += 1
                     continue
@@ -121,7 +121,7 @@ def call_gemini(prompt: str, config: dict, max_retries: int = 3) -> dict:
             if response.status_code >= 500:
                 if retry_count < max_retries:
                     delay = base_delay * (2 ** retry_count)
-                    logging.warning(f"Server error ({response.status_code}). Retrying in {delay}s...")
+                    logger.warning(f"Server error ({response.status_code}). Retrying in {delay}s... (attempt {retry_count + 1}/{max_retries})")
                     time.sleep(delay)
                     retry_count += 1
                     continue
@@ -142,21 +142,26 @@ def call_gemini(prompt: str, config: dict, max_retries: int = 3) -> dict:
                 start = model_output.find("{")
                 end = model_output.rfind("}")
                 if start != -1 and end != -1:
-                    return json.loads(model_output[start:end + 1])
+                    try:
+                        return json.loads(model_output[start:end + 1])
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON from Gemini: {model_output[:100]}")
+                        return {"error": "Invalid JSON from Gemini", "retryable": False}
                 return {"error": "Invalid JSON from Gemini", "retryable": False}
                 
         except requests.exceptions.Timeout:
             if retry_count < max_retries:
                 delay = base_delay * (2 ** retry_count)
-                logging.warning(f"Gemini timeout. Retrying in {delay}s...")
+                logger.warning(f"Gemini timeout. Retrying in {delay}s... (attempt {retry_count + 1}/{max_retries})")
                 time.sleep(delay)
                 retry_count += 1
                 continue
             return {"error": "Request timeout", "retryable": True}
         except Exception as e:
-            logging.error(f"Gemini API error: {e}")
+            logger.error(f"Gemini API error: {e}")
             return {"error": str(e), "retryable": True}
     
+    logger.error("Max retries exceeded")
     return {"error": "Max retries exceeded", "retryable": True}
 
 
@@ -193,5 +198,5 @@ Text:
             return call_gemini(prompt, llm_config, max_retries)
             
     except Exception as e:
-        logging.error(f"LLM configuration error: {e}")
+        logger.error(f"LLM configuration error: {e}")
         return {"error": str(e), "retryable": False}
