@@ -186,6 +186,13 @@ docker-compose up --build
 docker-compose up -d --build
 ```
 
+### To run docker image from docker hub
+Need to provide the env file (.env.production) for each image.
+Or create a docker-compose.yaml file 
+```
+docker run --env-file .env.production gourav094/api-gateway:latest
+```
+
 ### 5️⃣ Access the Application
 
 | Service | URL |

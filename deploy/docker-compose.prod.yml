@@ -1,16 +1,16 @@
+version: "3.9"
+
 services:
   api-gateway:
-    build:
-      context: ./backend
-      dockerfile: api-gateway/Dockerfile
+    image: gourav094/vendoriq-api-gateway:latest
     container_name: vendoriq-api-gateway
     restart: unless-stopped
     ports:
       - "4000:4000"
     environment:
-      - NODE_ENV=dev
+      - NODE_ENV=production
     env_file:
-      - ./backend/.env.local
+      - ./.env.production
     depends_on:
       - authentication-service
       - email-storage-service
@@ -18,71 +18,60 @@ services:
       - chat-service
 
   authentication-service:
-    build:
-      context: ./backend
-      dockerfile: authentication-service/Dockerfile
+    image: gourav094/vendoriq-auth-service:latest
     container_name: vendoriq-auth-service
     restart: unless-stopped
     ports:
       - "4001:4001"
     environment:
-      - NODE_ENV=dev
+      - NODE_ENV=production
     env_file:
-      - ./backend/.env.local
+      - ./.env.production
 
   email-storage-service:
-    build:
-      context: ./backend
-      dockerfile: email-storage-service/Dockerfile
+    image: gourav094/vendoriq-email-service:latest
     container_name: vendoriq-email-service
     restart: unless-stopped
     ports:
       - "4002:4002"
     environment:
-      - NODE_ENV=dev
+      - NODE_ENV=production
     env_file:
-      - ./backend/.env.local
+      - ./.env.production
     depends_on:
       - authentication-service
 
-  # OCR Extraction Service
   ocr-extraction-service:
-    build:
-      context: ./backend
-      dockerfile: ocr-extraction-service/Dockerfile
+    image: gourav094/vendoriq-ocr-service:latest
     container_name: vendoriq-ocr-service
     restart: unless-stopped
     ports:
       - "4003:4003"
     environment:
-      - NODE_ENV=dev
+      - NODE_ENV=production
     env_file:
-      - ./backend/.env.local
+      - ./.env.production
 
   chat-service:
-    build:
-      context: ./backend
-      dockerfile: chat-service/Dockerfile
+    image: gourav094/vendoriq-chat-service:latest
     container_name: vendoriq-chat-service
     restart: unless-stopped
     ports:
       - "4005:4005"
     environment:
-      - NODE_ENV=dev
+      - NODE_ENV=production
     env_file:
-      - ./backend/.env.local
+      - ./.env.production
     volumes:
       - chat_vectordb:/app/data/vectordb
     deploy:
       resources:
         limits:
           memory: 2G
-          cpus: '1.0'
+          cpus: "1.0"
 
   frontend:
-    build:
-      context: ./Frontend
-      dockerfile: Dockerfile
+    image: gourav094/vendoriq-frontend:latest
     container_name: vendoriq-frontend
     restart: unless-stopped
     ports:
@@ -92,3 +81,5 @@ services:
 
 volumes:
   chat_vectordb:
+
+# docker compose -f docker-compose.prod.yml up -d
